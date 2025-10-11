@@ -1,0 +1,26 @@
+{
+  "name": "axecore-mcp-server",
+  "version": "1.0.0",
+  "description": "A basic MCP server",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "axecore-mcp-server": "build/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node build/index.js",
+    "dev": "tsc && node build/index.js"
+  },
+  "keywords": ["mcp", "server"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
