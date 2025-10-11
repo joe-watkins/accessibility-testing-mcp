@@ -12,6 +12,16 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import puppeteer from "puppeteer";
 import type { AxeResults } from "axe-core";
+import { fileURLToPath } from "url";
+import { dirname, join } from "path";
+
+// Get the directory of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const AXE_CORE_PATH = join(__dirname, "../node_modules/axe-core/axe.min.js");
+
+// Configuration
+const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 
 // Type definitions for axe-core results
 interface AxeResultNode {
@@ -167,11 +177,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.goto(url, { waitUntil: "networkidle0" });
+      // Use 'domcontentloaded' for faster loading of heavy sites
+      // 'networkidle0' waits for all network requests, which can be too slow for complex sites
+      await page.goto(url, { 
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT 
+      });
+      
+      // Wait a bit for dynamic content to load
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       // Inject axe-core
       await page.addScriptTag({
-        path: "./node_modules/axe-core/axe.min.js",
+        path: AXE_CORE_PATH,
       });
 
       // Run axe
@@ -208,11 +226,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: "networkidle0" });
+      await page.setContent(html, { 
+        waitUntil: "networkidle0",
+        timeout: NAVIGATION_TIMEOUT 
+      });
 
       // Inject axe-core
       await page.addScriptTag({
-        path: "./node_modules/axe-core/axe.min.js",
+        path: AXE_CORE_PATH,
       });
 
       // Run axe
@@ -248,7 +269,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Inject axe-core
       await page.addScriptTag({
-        path: "./node_modules/axe-core/axe.min.js",
+        path: AXE_CORE_PATH,
       });
 
       // Get rules

@@ -89,22 +89,64 @@ npm run watch
 }
 ```
 
-## Testing with Claude Desktop
+## Installation & Configuration
+
+### VS Code (GitHub Copilot)
+
+1. **Install the server** (if not already done):
+   ```bash
+   git clone https://github.com/joe-watkins/axecore-mcp-server.git
+   cd axecore-mcp-server
+   npm install
+   npm run build
+   ```
+
+2. **Configure VS Code settings**:
+   - Open VS Code Settings (JSON) by pressing `Cmd+Shift+P` (Mac) or `Ctrl+Shift+P` (Windows/Linux)
+   - Select "Preferences: Open User Settings (JSON)"
+   - Add the MCP server configuration:
+
+   ```json
+   {
+     "github.copilot.chat.mcp.enabled": true,
+     "github.copilot.chat.mcp.servers": {
+       "axecore": {
+         "command": "node",
+         "args": ["<ABSOLUTE_PATH_TO_PROJECT>/build/index.js"]
+       }
+     }
+   }
+   ```
+   
+   Replace `<ABSOLUTE_PATH_TO_PROJECT>` with the full path to where you cloned this repository.  
+   For example: `/Users/username/projects/axecore-mcp-server/build/index.js`
+
+3. **Restart VS Code** to load the MCP server
+
+4. **Use in Copilot Chat**:
+   - Open GitHub Copilot Chat
+   - The axecore tools will be available automatically
+   - Try: "@workspace test https://example.com for accessibility issues"
+
+### Claude Desktop
 
 Add this to your Claude Desktop configuration file:
 
-**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+**macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`  
+**Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "axecore": {
       "command": "node",
-      "args": ["/Users/JWatkin70/Sites/axecore-mcp-server/build/index.js"]
+      "args": ["<ABSOLUTE_PATH_TO_PROJECT>/build/index.js"]
     }
   }
 }
 ```
+
+Replace `<ABSOLUTE_PATH_TO_PROJECT>` with the full path to where you cloned this repository.
 
 After adding the configuration, restart Claude Desktop. You can then ask Claude to:
 
