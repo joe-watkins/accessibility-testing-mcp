@@ -126,8 +126,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: "analyze_url_json",
+        description: "Run axe-core accessibility tests on a given URL and return violations in raw JSON format",
+        inputSchema: {
+          type: "object",
+          properties: {
+            url: {
+              type: "string",
+              description: "The URL to test for accessibility issues (must include http:// or https://)",
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+            },
+          },
+          required: ["url"],
+        },
+      },
+      {
         name: "analyze_html",
         description: "Run axe-core accessibility tests on raw HTML content",
+        inputSchema: {
+          type: "object",
+          properties: {
+            html: {
+              type: "string",
+              description: "The HTML content to test for accessibility issues",
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+            },
+          },
+          required: ["html"],
+        },
+      },
+      {
+        name: "analyze_html_json",
+        description: "Run axe-core accessibility tests on raw HTML content and return violations in raw JSON format",
         inputSchema: {
           type: "object",
           properties: {
@@ -215,6 +253,55 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
+  if (name === "analyze_url_json") {
+    const url = args?.url as string;
+    const tags = args?.tags as string[] | undefined;
+
+    if (!url) {
+      throw new Error("URL is required");
+    }
+
+    const browser = await puppeteer.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      // Use 'domcontentloaded' for faster loading of heavy sites
+      // 'networkidle0' waits for all network requests, which can be too slow for complex sites
+      await page.goto(url, { 
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT 
+      });
+      
+      // Wait a bit for dynamic content to load
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Inject axe-core
+      await page.addScriptTag({
+        path: AXE_CORE_PATH,
+      });
+
+      // Run axe
+      const results = await page.evaluate((runTags) => {
+        return new Promise((resolve) => {
+          // @ts-ignore - axe is injected globally
+          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+        });
+      }, tags);
+
+      const axeResults = results as AxeResults;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(axeResults.violations, null, 2),
+          },
+        ],
+      };
+    } finally {
+      await browser.close();
+    }
+  }
+
   if (name === "analyze_html") {
     const html = args?.html as string;
     const tags = args?.tags as string[] | undefined;
@@ -251,6 +338,50 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           {
             type: "text",
             text: formattedResults,
+          },
+        ],
+      };
+    } finally {
+      await browser.close();
+    }
+  }
+
+  if (name === "analyze_html_json") {
+    const html = args?.html as string;
+    const tags = args?.tags as string[] | undefined;
+
+    if (!html) {
+      throw new Error("HTML content is required");
+    }
+
+    const browser = await puppeteer.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { 
+        waitUntil: "networkidle0",
+        timeout: NAVIGATION_TIMEOUT 
+      });
+
+      // Inject axe-core
+      await page.addScriptTag({
+        path: AXE_CORE_PATH,
+      });
+
+      // Run axe
+      const results = await page.evaluate((runTags) => {
+        return new Promise((resolve) => {
+          // @ts-ignore - axe is injected globally
+          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+        });
+      }, tags);
+
+      const axeResults = results as AxeResults;
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(axeResults.violations, null, 2),
           },
         ],
       };

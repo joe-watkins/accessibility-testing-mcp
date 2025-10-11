@@ -12,9 +12,19 @@ A Model Context Protocol (MCP) server that provides accessibility testing tools 
   - Returns detailed violation reports with remediation guidance
   - Optional filtering by WCAG level (A, AA, AAA)
 
+- **`analyze_url_json`**: Run axe-core accessibility tests on any URL with JSON output
+  - Same functionality as `analyze_url`
+  - Returns only violations in raw JSON format
+  - Perfect for machine processing or integration with other tools
+
 - **`analyze_html`**: Test raw HTML content for accessibility issues
   - Perfect for testing components or HTML snippets
   - Same comprehensive reporting as URL analysis
+
+- **`analyze_html_json`**: Test raw HTML content with JSON output
+  - Same functionality as `analyze_html`
+  - Returns only violations in raw JSON format
+  - Perfect for machine processing or integration with other tools
 
 - **`get_rules`**: Get information about all available axe-core rules
   - View all accessibility rules
@@ -53,7 +63,7 @@ npm run watch
 
 ## Usage Examples
 
-### Analyzing a URL
+### Analyzing a URL (Markdown Output)
 
 ```typescript
 // The AI assistant can use this tool to test any website
@@ -66,11 +76,36 @@ npm run watch
 }
 ```
 
-### Analyzing HTML Content
+### Analyzing a URL (JSON Output)
+
+```typescript
+// Returns raw JSON violations for machine processing
+{
+  "name": "analyze_url_json",
+  "arguments": {
+    "url": "https://example.com",
+    "tags": ["wcag2aa", "wcag21aa"]  // Optional: filter by WCAG level
+  }
+}
+```
+
+### Analyzing HTML Content (Markdown Output)
 
 ```typescript
 {
   "name": "analyze_html",
+  "arguments": {
+    "html": "<button>Click me</button>",  // Missing accessible label
+    "tags": ["wcag2a"]
+  }
+}
+```
+
+### Analyzing HTML Content (JSON Output)
+
+```typescript
+{
+  "name": "analyze_html_json",
   "arguments": {
     "html": "<button>Click me</button>",  // Missing accessible label
     "tags": ["wcag2a"]
