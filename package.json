@@ -1,7 +1,7 @@
 {
   "name": "axecore-mcp-server",
   "version": "1.0.0",
-  "description": "A basic MCP server",
+  "description": "MCP server for accessibility testing using axe-core",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -13,13 +13,19 @@
     "start": "node build/index.js",
     "dev": "tsc && node build/index.js"
   },
-  "keywords": ["mcp", "server"],
+  "keywords": [
+    "mcp",
+    "server"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4"
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "axe-core": "^4.11.0",
+    "puppeteer": "^24.24.0"
   },
   "devDependencies": {
+    "@types/axe-core": "^2.0.2",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2"
   }
