@@ -26,53 +26,101 @@ const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 // Engine types
 type Engine = "axe" | "ace";
 
+// Normalized WCAG levels that work for both engines
+type WcagLevel = "2.0_A" | "2.0_AA" | "2.0_AAA" | "2.1_A" | "2.1_AA" | "2.1_AAA" | "2.2_A" | "2.2_AA" | "2.2_AAA";
+
+// Mapping from normalized WCAG level to engine-specific values
+const WCAG_LEVEL_MAP: Record<WcagLevel, { axeTags: string[]; acePolicy: string }> = {
+  "2.0_A":   { axeTags: ["wcag2a"],   acePolicy: "WCAG_2_0" },
+  "2.0_AA":  { axeTags: ["wcag2a", "wcag2aa"],  acePolicy: "WCAG_2_0" },
+  "2.0_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa"], acePolicy: "WCAG_2_0" },
+  "2.1_A":   { axeTags: ["wcag2a", "wcag21a"],  acePolicy: "WCAG_2_1" },
+  "2.1_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], acePolicy: "WCAG_2_1" },
+  "2.1_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa"], acePolicy: "WCAG_2_1" },
+  "2.2_A":   { axeTags: ["wcag2a", "wcag21a", "wcag22a"], acePolicy: "WCAG_2_2" },
+  "2.2_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"], acePolicy: "WCAG_2_2" },
+  "2.2_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa", "wcag22a", "wcag22aa", "wcag22aaa"], acePolicy: "WCAG_2_2" },
+};
+
 // Environment-based configuration with defaults
 const DEFAULT_ENGINE: Engine = "axe";
-const DEFAULT_WCAG_VERSION = "wcag2aa";
+const DEFAULT_WCAG_LEVEL: WcagLevel = "2.1_AA";
 const DEFAULT_RUN_EXPERIMENTAL = false;
 const DEFAULT_BEST_PRACTICES = true;
 
 // ACE-specific defaults
-const DEFAULT_ACE_POLICIES = ["IBM_Accessibility"];
 const DEFAULT_ACE_REPORT_LEVELS = ["violation", "potentialviolation", "recommendation"];
 
 interface ServerConfig {
   engine: Engine;
-  // Axe settings
-  wcagVersion: string;
+  wcagLevel: WcagLevel;
   runExperimental: boolean;
   includeBestPractices: boolean;
   // ACE settings
-  acePolicies: string[];
   aceReportLevels: string[];
+}
+
+// Parse WCAG_LEVEL env var with flexible input formats
+function parseWcagLevel(input: string | undefined): WcagLevel {
+  if (!input) return DEFAULT_WCAG_LEVEL;
+  
+  // Normalize input: remove spaces, convert to uppercase for level
+  const normalized = input.trim().toLowerCase()
+    .replace(/wcag\s*/i, "")      // Remove "WCAG" prefix
+    .replace(/\s+/g, "_")          // Replace spaces with underscore
+    .replace(/level\s*/i, "")      // Remove "level" word
+    .replace(/_+/g, "_");          // Clean up multiple underscores
+  
+  // Try to match patterns like "2.1_aa", "21aa", "2.1 AA", etc.
+  const match = normalized.match(/^(\d)\.?(\d)?[_\s]*(a{1,3})$/i);
+  if (match) {
+    const major = match[1];
+    const minor = match[2] || "0";
+    const level = match[3].toUpperCase();
+    const key = `${major}.${minor}_${level}` as WcagLevel;
+    if (key in WCAG_LEVEL_MAP) return key;
+  }
+  
+  // Direct match attempt
+  if (input in WCAG_LEVEL_MAP) return input as WcagLevel;
+  
+  // Fallback to default
+  console.error(`Invalid WCAG_LEVEL "${input}", using default "${DEFAULT_WCAG_LEVEL}"`);
+  return DEFAULT_WCAG_LEVEL;
 }
 
 // Load configuration from environment variables
 function loadConfig(): ServerConfig {
   const engine = (process.env.A11Y_ENGINE?.toLowerCase() as Engine) || DEFAULT_ENGINE;
-  const wcagVersion = process.env.AXE_WCAG_VERSION || DEFAULT_WCAG_VERSION;
-  const runExperimental = process.env.AXE_RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
-  const includeBestPractices = process.env.AXE_BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
+  const wcagLevel = parseWcagLevel(process.env.WCAG_LEVEL);
+  const runExperimental = process.env.RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
+  const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
   
   // ACE settings
-  const acePolicies = process.env.ACE_POLICIES 
-    ? process.env.ACE_POLICIES.split(",").map(p => p.trim())
-    : DEFAULT_ACE_POLICIES;
   const aceReportLevels = process.env.ACE_REPORT_LEVELS
     ? process.env.ACE_REPORT_LEVELS.split(",").map(l => l.trim())
     : DEFAULT_ACE_REPORT_LEVELS;
 
   return {
     engine,
-    wcagVersion,
+    wcagLevel,
     runExperimental,
     includeBestPractices,
-    acePolicies,
     aceReportLevels,
   };
 }
 
 const serverConfig = loadConfig();
+
+// Get axe tags for current WCAG level
+function getAxeTags(): string[] {
+  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].axeTags;
+}
+
+// Get ACE policy for current WCAG level
+function getAcePolicy(): string {
+  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].acePolicy;
+}
 
 // Helper function to build axe run options
 function buildAxeOptions(userTags?: string[]): any {
@@ -84,7 +132,7 @@ function buildAxeOptions(userTags?: string[]): any {
   }
   
   // Otherwise, use server configuration
-  tags.push(serverConfig.wcagVersion);
+  tags.push(...getAxeTags());
   
   if (serverConfig.includeBestPractices) {
     tags.push("best-practice");
@@ -319,7 +367,12 @@ async function runACEAnalysis(content: string, label: string, policies?: string[
   // Dynamic import for accessibility-checker (ESM compatibility)
   const aChecker = await import("accessibility-checker");
   
+  // Use provided policies, or derive from WCAG_LEVEL config
+  const effectivePolicies = policies || [getAcePolicy()];
+  
   try {
+    // Note: accessibility-checker uses .achecker.yml or defaults
+    // We pass the content and let it use its configuration
     const result = await aChecker.getCompliance(content, label);
     return result.report as unknown as ACEReport;
   } finally {
@@ -329,13 +382,13 @@ async function runACEAnalysis(content: string, label: string, policies?: string[
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const engineNote = `Current default engine: ${serverConfig.engine}. Set A11Y_ENGINE env var to 'axe' or 'ace' to change.`;
+  const configNote = `Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}`;
   
   return {
     tools: [
       {
         name: "analyze_url",
-        description: `Run accessibility tests on a URL and return detailed violation reports. ${engineNote}`,
+        description: `Run accessibility tests on a URL and return detailed violation reports. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -351,7 +404,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["url"],
@@ -359,7 +412,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_url_json",
-        description: `Run accessibility tests on a URL and return violations in raw JSON format. ${engineNote}`,
+        description: `Run accessibility tests on a URL and return violations in raw JSON format. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -375,7 +428,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["url"],
@@ -383,7 +436,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html",
-        description: `Run accessibility tests on raw HTML content. ${engineNote}`,
+        description: `Run accessibility tests on raw HTML content. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -399,7 +452,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["html"],
@@ -407,7 +460,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html_json",
-        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. ${engineNote}`,
+        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -423,7 +476,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["html"],
@@ -431,7 +484,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_rules",
-        description: "Get information about available accessibility rules for the specified engine",
+        description: `Get information about available accessibility rules for the specified engine. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -644,8 +697,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (engine === "ace") {
       // ACE doesn't have a simple getRules API, provide policy info instead
       let output = `# IBM Equal Access Accessibility Rules\n\n`;
+      output += `## Current Configuration\n\n`;
+      output += `- **WCAG Level**: ${serverConfig.wcagLevel}\n`;
+      output += `- **Policy**: ${getAcePolicy()}\n`;
+      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
       output += `## Available Policies\n\n`;
-      output += `- **IBM_Accessibility**: IBM accessibility requirements (includes WCAG 2.1 AA)\n`;
       output += `- **WCAG_2_0**: WCAG 2.0 guidelines\n`;
       output += `- **WCAG_2_1**: WCAG 2.1 guidelines\n`;
       output += `- **WCAG_2_2**: WCAG 2.2 guidelines\n\n`;
@@ -655,9 +711,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       output += `- **recommendation**: Suggested improvements\n`;
       output += `- **potentialrecommendation**: Possible improvements to review\n`;
       output += `- **manual**: Requires manual testing\n\n`;
-      output += `## Current Configuration\n\n`;
-      output += `- **Policies**: ${serverConfig.acePolicies.join(", ")}\n`;
-      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
       output += `For complete rule documentation, visit: https://www.ibm.com/able/requirements/checker-rule-sets\n`;
 
       return {
@@ -761,11 +814,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - **wcag22aa**: WCAG 2.2 Level AA
 - **best-practice**: Best practices beyond WCAG requirements
 
-## IBM Equal Access Policies
+## IBM Equal Access (ACE) Policies
 
-- **IBM_Accessibility**: IBM's accessibility requirements (covers WCAG 2.1 AA)
-- **WCAG_2_1**: WCAG 2.1 specific rules
-- **WCAG_2_2**: WCAG 2.2 specific rules
+- **WCAG_2_0**: WCAG 2.0 guidelines
+- **WCAG_2_1**: WCAG 2.1 guidelines (default)
+- **WCAG_2_2**: WCAG 2.2 guidelines
 
 ## Four Principles of WCAG (POUR)
 
@@ -846,11 +899,6 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - CI/CD integration
 - Projects requiring zero false positives
 
-**Configuration:**
-- AXE_WCAG_VERSION: wcag2a, wcag2aa, wcag21aa, etc.
-- AXE_BEST_PRACTICES: true/false
-- AXE_RUN_EXPERIMENTAL: true/false
-
 ## IBM Equal Access (ACE)
 
 **Strengths:**
@@ -866,8 +914,19 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - Thorough accessibility audits
 - Projects needing detailed guidance
 
-**Configuration:**
-- ACE_POLICIES: IBM_Accessibility, WCAG_2_1, WCAG_2_2
+## Unified Configuration
+
+Both engines now use the same WCAG_LEVEL setting:
+
+**WCAG_LEVEL values:**
+- 2.0_A, 2.0_AA, 2.0_AAA
+- 2.1_A, 2.1_AA, 2.1_AAA (default: 2.1_AA)
+- 2.2_A, 2.2_AA, 2.2_AAA
+
+**Other settings:**
+- A11Y_ENGINE: axe (default) or ace
+- BEST_PRACTICES: true/false (axe only)
+- RUN_EXPERIMENTAL: true/false (axe only)
 - ACE_REPORT_LEVELS: violation, potentialviolation, recommendation
 
 ## Choosing an Engine
@@ -986,7 +1045,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   
-  console.error(`Accessibility Testing MCP Server v2.0.0 running on stdio (Engine: ${serverConfig.engine})`);
+  console.error(`Accessibility Testing MCP Server v2.0.0 (Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel})`);
 }
 
 main().catch((error) => {
