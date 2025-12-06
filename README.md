@@ -45,6 +45,7 @@ Configure via MCP config `env` section:
 | `A11Y_ENGINE` | `axe`, `ace` | `axe` | Testing engine |
 | `WCAG_LEVEL` | `2.0_A`, `2.0_AA`, `2.1_A`, `2.1_AA`, `2.2_AA`, etc. | `2.1_AA` | WCAG version & level |
 | `BEST_PRACTICES` | `true`, `false` | `true` | Include best practices (axe) |
+| `RECOMMENDATIONS` | `true`, `false` | `true` | Include recommendations (ace) |
 | `RUN_EXPERIMENTAL` | `true`, `false` | `false` | Experimental rules (axe) |
 
 ### VS Code (GitHub Copilot)

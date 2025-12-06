@@ -48,15 +48,13 @@ const DEFAULT_WCAG_LEVEL: WcagLevel = "2.1_AA";
 const DEFAULT_RUN_EXPERIMENTAL = false;
 const DEFAULT_BEST_PRACTICES = true;
 
-// ACE-specific defaults
-const DEFAULT_ACE_REPORT_LEVELS = ["violation", "potentialviolation", "recommendation"];
-
 interface ServerConfig {
   engine: Engine;
   wcagLevel: WcagLevel;
   runExperimental: boolean;
   includeBestPractices: boolean;
   // ACE settings
+  includeRecommendations: boolean;
   aceReportLevels: string[];
 }
 
@@ -96,16 +94,22 @@ function loadConfig(): ServerConfig {
   const runExperimental = process.env.RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
   const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
   
-  // ACE settings
+  // ACE settings - RECOMMENDATIONS works like BEST_PRACTICES for axe
+  const includeRecommendations = process.env.RECOMMENDATIONS !== "false";
+  
+  // Build ACE report levels based on config
   const aceReportLevels = process.env.ACE_REPORT_LEVELS
     ? process.env.ACE_REPORT_LEVELS.split(",").map(l => l.trim())
-    : DEFAULT_ACE_REPORT_LEVELS;
+    : includeRecommendations 
+      ? ["violation", "potentialviolation", "recommendation"]
+      : ["violation", "potentialviolation"];
 
   return {
     engine,
     wcagLevel,
     runExperimental,
     includeBestPractices,
+    includeRecommendations,
     aceReportLevels,
   };
 }
