@@ -4,12 +4,12 @@ An MCP server for accessibility testing using **axe-core** and **IBM Equal Acces
 
 ## Features
 
-### 🔧 Dual Engine Support
+### Dual Engine Support
 
 - **Axe-core** (Deque) - Industry standard, zero false positives
 - **IBM Equal Access** - Comprehensive IBM accessibility requirements
 
-### 🛠️ Tools
+### Tools
 
 | Tool | Description |
 |------|-------------|
@@ -21,7 +21,7 @@ An MCP server for accessibility testing using **axe-core** and **IBM Equal Acces
 
 All tools accept an optional `engine` parameter (`"axe"` or `"ace"`).
 
-### 📚 Resources
+### Resources
 
 - **WCAG Guidelines Reference** - Levels, principles, and tags
 - **Common Accessibility Issues** - Frequent violations and fixes
@@ -73,7 +73,7 @@ Add to `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "accessibility": {
+    "accessibility-testing-mcp": {
       "command": "node",
       "args": ["/path/to/accessibility-testing-mcp/build/index.js"],
       "env": {
