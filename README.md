@@ -1,6 +1,6 @@
 # Axecore MCP Server
 
-A Model Context Protocol (MCP) server that provides accessibility testing tools using axe-core. This server enables AI assistants to analyze web pages and HTML for accessibility issues.
+An Accessibility Sub-agent / Model Context Protocol (MCP) server that provides accessibility testing tools using axe-core. This server enables AI assistants to analyze web pages and HTML for accessibility issues.
 
 ## Features
 
@@ -142,15 +142,11 @@ npm run watch
    - Add the MCP server configuration:
 
    ```json
-   {
-     "github.copilot.chat.mcp.enabled": true,
-     "github.copilot.chat.mcp.servers": {
-       "axecore": {
-         "command": "node",
-         "args": ["<ABSOLUTE_PATH_TO_PROJECT>/build/index.js"]
-       }
-     }
-   }
+		"AxeCore - MCP": {
+			"type": "stdio",
+			"command": "node",
+			"args": ["<path to install folder>/build/index.js"]
+		}
    ```
    
    Replace `<ABSOLUTE_PATH_TO_PROJECT>` with the full path to where you cloned this repository.  
@@ -249,5 +245,4 @@ npm start
 - **puppeteer**: Headless browser automation
 
 ## License
-
 MIT
