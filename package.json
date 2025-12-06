@@ -1,11 +1,11 @@
 {
-  "name": "axecore-mcp-server",
+  "name": "accessibility-testing-mcp",
   "version": "1.0.0",
   "description": "MCP server for accessibility testing using axe-core",
   "type": "module",
   "main": "build/index.js",
   "bin": {
-    "axecore-mcp-server": "build/index.js"
+    "accessibility-testing-mcp": "build/index.js"
   },
   "scripts": {
     "build": "tsc",

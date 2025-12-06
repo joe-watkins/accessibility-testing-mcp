@@ -1,4 +1,4 @@
-# Axecore MCP Server
+# Accessibility Testing MCP
 
 An Accessibility Sub-agent / Model Context Protocol (MCP) server that provides accessibility testing tools using axe-core. This server enables AI assistants to analyze web pages and HTML for accessibility issues.
 
