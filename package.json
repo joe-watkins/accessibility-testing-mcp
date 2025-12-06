@@ -1,7 +1,7 @@
 {
   "name": "accessibility-testing-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for accessibility testing using axe-core",
+  "version": "2.0.0",
+  "description": "MCP server for accessibility testing using axe-core and IBM Equal Access",
   "type": "module",
   "main": "build/index.js",
   "bin": {
@@ -15,12 +15,18 @@
   },
   "keywords": [
     "mcp",
-    "server"
+    "server",
+    "accessibility",
+    "a11y",
+    "axe-core",
+    "ibm-equal-access",
+    "wcag"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "accessibility-checker": "^4.0.9",
     "axe-core": "^4.11.0",
     "puppeteer": "^24.24.0"
   },

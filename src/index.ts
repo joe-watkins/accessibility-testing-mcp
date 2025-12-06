@@ -10,7 +10,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import puppeteer from "puppeteer";
+import puppeteer, { Browser, Page } from "puppeteer";
 import type { AxeResults } from "axe-core";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -23,27 +23,52 @@ const AXE_CORE_PATH = join(__dirname, "../node_modules/axe-core/axe.min.js");
 // Configuration
 const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 
+// Engine types
+type Engine = "axe" | "ace";
+
 // Environment-based configuration with defaults
+const DEFAULT_ENGINE: Engine = "axe";
 const DEFAULT_WCAG_VERSION = "wcag2aa";
 const DEFAULT_RUN_EXPERIMENTAL = false;
 const DEFAULT_BEST_PRACTICES = true;
 
+// ACE-specific defaults
+const DEFAULT_ACE_POLICIES = ["IBM_Accessibility"];
+const DEFAULT_ACE_REPORT_LEVELS = ["violation", "potentialviolation", "recommendation"];
+
 interface ServerConfig {
+  engine: Engine;
+  // Axe settings
   wcagVersion: string;
   runExperimental: boolean;
   includeBestPractices: boolean;
+  // ACE settings
+  acePolicies: string[];
+  aceReportLevels: string[];
 }
 
 // Load configuration from environment variables
 function loadConfig(): ServerConfig {
+  const engine = (process.env.A11Y_ENGINE?.toLowerCase() as Engine) || DEFAULT_ENGINE;
   const wcagVersion = process.env.AXE_WCAG_VERSION || DEFAULT_WCAG_VERSION;
   const runExperimental = process.env.AXE_RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
   const includeBestPractices = process.env.AXE_BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
+  
+  // ACE settings
+  const acePolicies = process.env.ACE_POLICIES 
+    ? process.env.ACE_POLICIES.split(",").map(p => p.trim())
+    : DEFAULT_ACE_POLICIES;
+  const aceReportLevels = process.env.ACE_REPORT_LEVELS
+    ? process.env.ACE_REPORT_LEVELS.split(",").map(l => l.trim())
+    : DEFAULT_ACE_REPORT_LEVELS;
 
   return {
+    engine,
     wcagVersion,
     runExperimental,
     includeBestPractices,
+    acePolicies,
+    aceReportLevels,
   };
 }
 
@@ -91,11 +116,54 @@ interface AxeResultItem {
   nodes: AxeResultNode[];
 }
 
+// ACE result types
+interface ACEResultItem {
+  ruleId: string;
+  reasonId: string;
+  value: [string, string]; // [VIOLATION|RECOMMENDATION|INFORMATION, PASS|FAIL|POTENTIAL|MANUAL]
+  path: {
+    dom: string;
+    aria: string;
+  };
+  message: string;
+  messageArgs: string[];
+  snippet: string;
+  category: string;
+  level: string; // violation, potentialviolation, recommendation, potentialrecommendation, manual, pass
+  help?: string;
+}
+
+interface ACEReport {
+  scanID: string;
+  toolID: string;
+  label: string;
+  numExecuted: number;
+  nls: Record<string, Record<string, string>>;
+  summary: {
+    URL: string;
+    counts: {
+      violation: number;
+      potentialviolation: number;
+      recommendation: number;
+      potentialrecommendation: number;
+      manual: number;
+      pass: number;
+      ignored: number;
+    };
+    scanTime: number;
+    ruleArchive: string;
+    policies: string[];
+    reportLevels: string[];
+    startScan: number;
+  };
+  results: ACEResultItem[];
+}
+
 // Create server instance
 const server = new Server(
   {
-    name: "axecore-mcp-server",
-    version: "1.0.0",
+    name: "accessibility-testing-mcp",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -113,7 +181,7 @@ function formatAxeResults(results: any): string {
   const incomplete = results.incomplete || [];
   const inapplicable = results.inapplicable || [];
   
-  let output = `# Accessibility Test Results\n\n`;
+  let output = `# Accessibility Test Results (Axe-core)\n\n`;
   output += `**URL**: ${results.url}\n`;
   output += `**Timestamp**: ${results.timestamp}\n\n`;
   output += `## Summary\n`;
@@ -153,13 +221,121 @@ function formatAxeResults(results: any): string {
   return output;
 }
 
+// Helper function to format ACE results
+function formatACEResults(report: ACEReport): string {
+  const { summary, results } = report;
+  const violations = results.filter(r => r.level === "violation");
+  const potentialViolations = results.filter(r => r.level === "potentialviolation");
+  const recommendations = results.filter(r => r.level === "recommendation");
+  const manualChecks = results.filter(r => r.level === "manual");
+  
+  let output = `# Accessibility Test Results (IBM Equal Access)\n\n`;
+  output += `**URL**: ${summary.URL}\n`;
+  output += `**Scan Time**: ${summary.scanTime}ms\n`;
+  output += `**Policies**: ${summary.policies.join(", ")}\n`;
+  output += `**Rule Archive**: ${summary.ruleArchive}\n\n`;
+  
+  output += `## Summary\n`;
+  output += `- ❌ Violations: ${summary.counts.violation}\n`;
+  output += `- ⚠️  Potential Violations: ${summary.counts.potentialviolation}\n`;
+  output += `- 💡 Recommendations: ${summary.counts.recommendation}\n`;
+  output += `- 🔍 Manual Checks: ${summary.counts.manual}\n`;
+  output += `- ✅ Passes: ${summary.counts.pass}\n\n`;
+
+  if (violations.length > 0) {
+    output += `## Violations\n\n`;
+    violations.forEach((item, index) => {
+      output += `### ${index + 1}. ${item.ruleId}\n`;
+      output += `**Message**: ${item.message}\n`;
+      output += `**Category**: ${item.category}\n`;
+      output += `**Path**: ${item.path.dom}\n`;
+      output += `**Snippet**: \`${item.snippet}\`\n`;
+      output += `**Help**: https://able.ibm.com/rules/rule/${item.ruleId}\n\n`;
+    });
+  }
+
+  if (potentialViolations.length > 0) {
+    output += `## Potential Violations (Need Review)\n\n`;
+    potentialViolations.forEach((item, index) => {
+      output += `### ${index + 1}. ${item.ruleId}\n`;
+      output += `**Message**: ${item.message}\n`;
+      output += `**Category**: ${item.category}\n`;
+      output += `**Path**: ${item.path.dom}\n`;
+      output += `**Snippet**: \`${item.snippet}\`\n\n`;
+    });
+  }
+
+  if (recommendations.length > 0) {
+    output += `## Recommendations\n\n`;
+    recommendations.forEach((item, index) => {
+      output += `${index + 1}. **${item.ruleId}**: ${item.message}\n`;
+      output += `   Path: ${item.path.dom}\n\n`;
+    });
+  }
+
+  if (manualChecks.length > 0) {
+    output += `## Manual Checks Required\n\n`;
+    manualChecks.forEach((item, index) => {
+      output += `${index + 1}. **${item.ruleId}**: ${item.message}\n`;
+    });
+    output += `\n`;
+  }
+
+  return output;
+}
+
+// Convert ACE results to Axe-like JSON format for consistency
+function aceToAxeViolationsFormat(report: ACEReport): any[] {
+  const violations = report.results.filter(r => 
+    r.level === "violation" || r.level === "potentialviolation"
+  );
+  
+  // Group by ruleId
+  const grouped = violations.reduce((acc, item) => {
+    if (!acc[item.ruleId]) {
+      acc[item.ruleId] = {
+        id: item.ruleId,
+        impact: item.level === "violation" ? "serious" : "moderate",
+        tags: [`ibm-${item.category.toLowerCase().replace(/\s+/g, "-")}`],
+        description: item.message,
+        help: item.message,
+        helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+        nodes: []
+      };
+    }
+    acc[item.ruleId].nodes.push({
+      html: item.snippet,
+      target: [item.path.dom],
+      failureSummary: item.message
+    });
+    return acc;
+  }, {} as Record<string, any>);
+
+  return Object.values(grouped);
+}
+
+// ACE analysis function
+async function runACEAnalysis(content: string, label: string, policies?: string[]): Promise<ACEReport> {
+  // Dynamic import for accessibility-checker (ESM compatibility)
+  const aChecker = await import("accessibility-checker");
+  
+  try {
+    const result = await aChecker.getCompliance(content, label);
+    return result.report as unknown as ACEReport;
+  } finally {
+    await aChecker.close();
+  }
+}
+
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  const engineNote = `Current default engine: ${serverConfig.engine}. Set A11Y_ENGINE env var to 'axe' or 'ace' to change.`;
+  
   return {
     tools: [
       {
         name: "analyze_url",
-        description: "Run axe-core accessibility tests on a given URL and return detailed violation reports",
+        description: `Run accessibility tests on a URL and return detailed violation reports. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -167,10 +343,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "The URL to test for accessibility issues (must include http:// or https://)",
             },
+            engine: {
+              type: "string",
+              enum: ["axe", "ace"],
+              description: "Testing engine: 'axe' (axe-core) or 'ace' (IBM Equal Access). Defaults to server config.",
+            },
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["url"],
@@ -178,7 +359,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_url_json",
-        description: "Run axe-core accessibility tests on a given URL and return violations in raw JSON format",
+        description: `Run accessibility tests on a URL and return violations in raw JSON format. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -186,10 +367,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "The URL to test for accessibility issues (must include http:// or https://)",
             },
+            engine: {
+              type: "string",
+              enum: ["axe", "ace"],
+              description: "Testing engine: 'axe' (axe-core) or 'ace' (IBM Equal Access). Defaults to server config.",
+            },
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["url"],
@@ -197,7 +383,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html",
-        description: "Run axe-core accessibility tests on raw HTML content",
+        description: `Run accessibility tests on raw HTML content. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -205,10 +391,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "The HTML content to test for accessibility issues",
             },
+            engine: {
+              type: "string",
+              enum: ["axe", "ace"],
+              description: "Testing engine: 'axe' (axe-core) or 'ace' (IBM Equal Access). Defaults to server config.",
+            },
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["html"],
@@ -216,7 +407,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html_json",
-        description: "Run axe-core accessibility tests on raw HTML content and return violations in raw JSON format",
+        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -224,10 +415,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "The HTML content to test for accessibility issues",
             },
+            engine: {
+              type: "string",
+              enum: ["axe", "ace"],
+              description: "Testing engine: 'axe' (axe-core) or 'ace' (IBM Equal Access). Defaults to server config.",
+            },
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Optional array of tags to filter rules (e.g., ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'])",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["html"],
@@ -235,10 +431,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_rules",
-        description: "Get information about all available axe-core accessibility rules",
+        description: "Get information about available accessibility rules for the specified engine",
         inputSchema: {
           type: "object",
           properties: {
+            engine: {
+              type: "string",
+              enum: ["axe", "ace"],
+              description: "Testing engine to get rules for. Defaults to server config.",
+            },
             tags: {
               type: "array",
               items: { type: "string" },
@@ -254,6 +455,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
+  const engine = (args?.engine as Engine) || serverConfig.engine;
 
   if (name === "analyze_url") {
     const url = args?.url as string;
@@ -263,25 +465,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
+    if (engine === "ace") {
+      // Use IBM Equal Access
+      const report = await runACEAnalysis(url, `url-${Date.now()}`, tags);
+      const formattedResults = formatACEResults(report);
+      return {
+        content: [{ type: "text", text: formattedResults }],
+      };
+    }
+
+    // Use Axe-core
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      // Use 'domcontentloaded' for faster loading of heavy sites
-      // 'networkidle0' waits for all network requests, which can be too slow for complex sites
       await page.goto(url, { 
         waitUntil: "domcontentloaded",
         timeout: NAVIGATION_TIMEOUT 
       });
       
-      // Wait a bit for dynamic content to load
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Inject axe-core
-      await page.addScriptTag({
-        path: AXE_CORE_PATH,
-      });
+      await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run axe
       const results = await page.evaluate((runTags) => {
         return new Promise((resolve) => {
           // @ts-ignore - axe is injected globally
@@ -292,12 +497,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const formattedResults = formatAxeResults(results as AxeResults);
 
       return {
-        content: [
-          {
-            type: "text",
-            text: formattedResults,
-          },
-        ],
+        content: [{ type: "text", text: formattedResults }],
       };
     } finally {
       await browser.close();
@@ -312,25 +512,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
+    if (engine === "ace") {
+      const report = await runACEAnalysis(url, `url-json-${Date.now()}`, tags);
+      const violations = aceToAxeViolationsFormat(report);
+      return {
+        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
+      };
+    }
+
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
-      // Use 'domcontentloaded' for faster loading of heavy sites
-      // 'networkidle0' waits for all network requests, which can be too slow for complex sites
       await page.goto(url, { 
         waitUntil: "domcontentloaded",
         timeout: NAVIGATION_TIMEOUT 
       });
       
-      // Wait a bit for dynamic content to load
       await new Promise(resolve => setTimeout(resolve, 3000));
 
-      // Inject axe-core
-      await page.addScriptTag({
-        path: AXE_CORE_PATH,
-      });
+      await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run axe
       const axeOptions = buildAxeOptions(tags);
       const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
@@ -342,12 +543,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const axeResults = results as AxeResults;
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(axeResults.violations, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(axeResults.violations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -362,6 +558,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("HTML content is required");
     }
 
+    if (engine === "ace") {
+      const report = await runACEAnalysis(html, `html-${Date.now()}`, tags);
+      const formattedResults = formatACEResults(report);
+      return {
+        content: [{ type: "text", text: formattedResults }],
+      };
+    }
+
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
@@ -370,12 +574,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         timeout: NAVIGATION_TIMEOUT 
       });
 
-      // Inject axe-core
-      await page.addScriptTag({
-        path: AXE_CORE_PATH,
-      });
+      await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run axe
       const axeOptions = buildAxeOptions(tags);
       const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
@@ -387,12 +587,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const formattedResults = formatAxeResults(results as AxeResults);
 
       return {
-        content: [
-          {
-            type: "text",
-            text: formattedResults,
-          },
-        ],
+        content: [{ type: "text", text: formattedResults }],
       };
     } finally {
       await browser.close();
@@ -407,6 +602,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("HTML content is required");
     }
 
+    if (engine === "ace") {
+      const report = await runACEAnalysis(html, `html-json-${Date.now()}`, tags);
+      const violations = aceToAxeViolationsFormat(report);
+      return {
+        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
+      };
+    }
+
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
@@ -415,12 +618,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         timeout: NAVIGATION_TIMEOUT 
       });
 
-      // Inject axe-core
-      await page.addScriptTag({
-        path: AXE_CORE_PATH,
-      });
+      await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run axe
       const axeOptions = buildAxeOptions(tags);
       const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
@@ -432,12 +631,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const axeResults = results as AxeResults;
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(axeResults.violations, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(axeResults.violations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -447,17 +641,37 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === "get_rules") {
     const tags = args?.tags as string[] | undefined;
 
+    if (engine === "ace") {
+      // ACE doesn't have a simple getRules API, provide policy info instead
+      let output = `# IBM Equal Access Accessibility Rules\n\n`;
+      output += `## Available Policies\n\n`;
+      output += `- **IBM_Accessibility**: IBM accessibility requirements (includes WCAG 2.1 AA)\n`;
+      output += `- **WCAG_2_0**: WCAG 2.0 guidelines\n`;
+      output += `- **WCAG_2_1**: WCAG 2.1 guidelines\n`;
+      output += `- **WCAG_2_2**: WCAG 2.2 guidelines\n\n`;
+      output += `## Report Levels\n\n`;
+      output += `- **violation**: Accessibility failures\n`;
+      output += `- **potentialviolation**: Needs review for accessibility failures\n`;
+      output += `- **recommendation**: Suggested improvements\n`;
+      output += `- **potentialrecommendation**: Possible improvements to review\n`;
+      output += `- **manual**: Requires manual testing\n\n`;
+      output += `## Current Configuration\n\n`;
+      output += `- **Policies**: ${serverConfig.acePolicies.join(", ")}\n`;
+      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
+      output += `For complete rule documentation, visit: https://www.ibm.com/able/requirements/checker-rule-sets\n`;
+
+      return {
+        content: [{ type: "text", text: output }],
+      };
+    }
+
     const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent("<html><body></body></html>");
 
-      // Inject axe-core
-      await page.addScriptTag({
-        path: AXE_CORE_PATH,
-      });
+      await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Get rules
       const rules = await page.evaluate((filterTags) => {
         // @ts-ignore - axe is injected globally
         const allRules = axe.getRules();
@@ -484,12 +698,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       return {
-        content: [
-          {
-            type: "text",
-            text: output,
-          },
-        ],
+        content: [{ type: "text", text: output }],
       };
     } finally {
       await browser.close();
@@ -504,15 +713,21 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
   return {
     resources: [
       {
-        uri: "axe://wcag-guidelines",
+        uri: "a11y://wcag-guidelines",
         name: "WCAG Guidelines Reference",
         description: "Information about WCAG accessibility guidelines and levels",
         mimeType: "text/plain",
       },
       {
-        uri: "axe://common-issues",
+        uri: "a11y://common-issues",
         name: "Common Accessibility Issues",
         description: "Most common accessibility issues found in web applications",
+        mimeType: "text/plain",
+      },
+      {
+        uri: "a11y://engine-comparison",
+        name: "Engine Comparison",
+        description: "Comparison of Axe-core and IBM Equal Access engines",
         mimeType: "text/plain",
       },
     ],
@@ -523,7 +738,7 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const { uri } = request.params;
 
-  if (uri === "axe://wcag-guidelines") {
+  if (uri === "a11y://wcag-guidelines") {
     return {
       contents: [
         {
@@ -546,6 +761,12 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - **wcag22aa**: WCAG 2.2 Level AA
 - **best-practice**: Best practices beyond WCAG requirements
 
+## IBM Equal Access Policies
+
+- **IBM_Accessibility**: IBM's accessibility requirements (covers WCAG 2.1 AA)
+- **WCAG_2_1**: WCAG 2.1 specific rules
+- **WCAG_2_2**: WCAG 2.2 specific rules
+
 ## Four Principles of WCAG (POUR)
 
 1. **Perceivable**: Information and UI components must be presentable to users in ways they can perceive
@@ -557,7 +778,7 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   }
 
-  if (uri === "axe://common-issues") {
+  if (uri === "a11y://common-issues") {
     return {
       contents: [
         {
@@ -603,6 +824,69 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
     };
   }
 
+  if (uri === "a11y://engine-comparison") {
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: "text/plain",
+          text: `# Accessibility Testing Engine Comparison
+
+## Axe-core (Deque)
+
+**Strengths:**
+- Industry standard, widely adopted
+- Fast execution
+- Zero false positives philosophy
+- Extensive rule documentation
+- Great browser extension support
+
+**Best for:**
+- Quick automated scans
+- CI/CD integration
+- Projects requiring zero false positives
+
+**Configuration:**
+- AXE_WCAG_VERSION: wcag2a, wcag2aa, wcag21aa, etc.
+- AXE_BEST_PRACTICES: true/false
+- AXE_RUN_EXPERIMENTAL: true/false
+
+## IBM Equal Access (ACE)
+
+**Strengths:**
+- Comprehensive IBM accessibility requirements
+- Detailed remediation guidance
+- Covers more edge cases
+- Links to IBM accessibility documentation
+- Includes potential violations for review
+
+**Best for:**
+- Enterprise accessibility compliance
+- IBM product development
+- Thorough accessibility audits
+- Projects needing detailed guidance
+
+**Configuration:**
+- ACE_POLICIES: IBM_Accessibility, WCAG_2_1, WCAG_2_2
+- ACE_REPORT_LEVELS: violation, potentialviolation, recommendation
+
+## Choosing an Engine
+
+Use **Axe-core** when you need:
+- Fast, reliable automated testing
+- Zero false positive philosophy
+- Broad community support
+
+Use **IBM Equal Access** when you need:
+- More comprehensive rule coverage
+- Detailed IBM compliance requirements
+- Additional potential violation detection
+- Enterprise-level accessibility auditing`,
+        },
+      ],
+    };
+  }
+
   throw new Error(`Unknown resource: ${uri}`);
 });
 
@@ -617,6 +901,11 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
           {
             name: "wcag_level",
             description: "Target WCAG level (A, AA, or AAA)",
+            required: false,
+          },
+          {
+            name: "engine",
+            description: "Testing engine preference (axe or ace)",
             required: false,
           },
         ],
@@ -642,13 +931,14 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 
   if (name === "accessibility_review") {
     const wcagLevel = (args?.wcag_level as string) || "AA";
+    const engine = (args?.engine as string) || serverConfig.engine;
     return {
       messages: [
         {
           role: "user",
           content: {
             type: "text",
-            text: `I need to perform a WCAG ${wcagLevel} accessibility review. Please analyze the accessibility of my webpage and provide:
+            text: `I need to perform a WCAG ${wcagLevel} accessibility review using ${engine === 'ace' ? 'IBM Equal Access' : 'axe-core'}. Please analyze the accessibility of my webpage and provide:
 
 1. A summary of violations found
 2. Priority ranking based on impact
@@ -696,7 +986,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   
-  console.error("Axecore MCP Server running on stdio");
+  console.error(`Accessibility Testing MCP Server v2.0.0 running on stdio (Engine: ${serverConfig.engine})`);
 }
 
 main().catch((error) => {
