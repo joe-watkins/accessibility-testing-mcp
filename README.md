@@ -126,6 +126,19 @@ npm run watch
 
 ## Installation & Configuration
 
+### Environment Variables
+
+The server supports configuration via environment variables with the following defaults:
+
+- **`AXE_WCAG_VERSION`**: WCAG version to test against (default: `"wcag2aa"`)
+  - Options: `"wcag2a"`, `"wcag2aa"`, `"wcag2aaa"`, `"wcag21a"`, `"wcag21aa"`, `"wcag22aa"`
+- **`AXE_RUN_EXPERIMENTAL`**: Enable experimental axe-core rules (default: `false`)
+  - Set to `"true"` to enable
+- **`AXE_BEST_PRACTICES`**: Include best practice rules (default: `true`)
+  - Set to `"false"` to disable
+
+These settings apply to all tests unless overridden by the `tags` parameter in tool calls.
+
 ### VS Code (GitHub Copilot)
 
 1. **Install the server** (if not already done):
@@ -141,12 +154,17 @@ npm run watch
    - Select "Preferences: Open User Settings (JSON)"
    - Add the MCP server configuration:
 
-   ```json
-		"AxeCore - MCP": {
-			"type": "stdio",
-			"command": "node",
-			"args": ["<path to install folder>/build/index.js"]
-		}
+   ```jsonc
+   "AxeCore - MCP": {
+     "type": "stdio",
+     "command": "node",
+     "args": ["<path to install folder>/build/index.js"],
+     "env": {
+       "AXE_WCAG_VERSION": "wcag2aa",
+       "AXE_RUN_EXPERIMENTAL": "false",
+       "AXE_BEST_PRACTICES": "true"
+     }
+   }
    ```
    
    Replace `<ABSOLUTE_PATH_TO_PROJECT>` with the full path to where you cloned this repository.  
@@ -171,13 +189,26 @@ Add this to your Claude Desktop configuration file:
   "mcpServers": {
     "axecore": {
       "command": "node",
-      "args": ["<ABSOLUTE_PATH_TO_PROJECT>/build/index.js"]
+      "args": ["<ABSOLUTE_PATH_TO_PROJECT>/build/index.js"],
+      "env": {
+        "AXE_WCAG_VERSION": "wcag2aa",
+        "AXE_RUN_EXPERIMENTAL": "false",
+        "AXE_BEST_PRACTICES": "true"
+      }
     }
   }
 }
 ```
 
 Replace `<ABSOLUTE_PATH_TO_PROJECT>` with the full path to where you cloned this repository.
+
+### Configuration Notes
+
+- **Environment variables are optional** - the server uses sensible defaults if not specified
+- **Tool call `tags` parameter overrides environment configuration** - if you pass specific tags in a tool call, they take precedence over the environment settings
+- **WCAG version**: Most organizations target WCAG 2.1 Level AA (`"wcag21aa"`) or WCAG 2.2 AA (`"wcag22aa"`)
+- **Experimental rules**: Include rules still being tested by the axe-core team (e.g., `css-orientation-lock`, `focus-order-semantics`)
+- **Best practices**: Include additional recommendations beyond WCAG compliance
 
 After adding the configuration, restart Claude Desktop. You can then ask Claude to:
 

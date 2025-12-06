@@ -23,6 +23,57 @@ const AXE_CORE_PATH = join(__dirname, "../node_modules/axe-core/axe.min.js");
 // Configuration
 const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 
+// Environment-based configuration with defaults
+const DEFAULT_WCAG_VERSION = "wcag2aa";
+const DEFAULT_RUN_EXPERIMENTAL = false;
+const DEFAULT_BEST_PRACTICES = true;
+
+interface ServerConfig {
+  wcagVersion: string;
+  runExperimental: boolean;
+  includeBestPractices: boolean;
+}
+
+// Load configuration from environment variables
+function loadConfig(): ServerConfig {
+  const wcagVersion = process.env.AXE_WCAG_VERSION || DEFAULT_WCAG_VERSION;
+  const runExperimental = process.env.AXE_RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
+  const includeBestPractices = process.env.AXE_BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
+
+  return {
+    wcagVersion,
+    runExperimental,
+    includeBestPractices,
+  };
+}
+
+const serverConfig = loadConfig();
+
+// Helper function to build axe run options
+function buildAxeOptions(userTags?: string[]): any {
+  const tags: string[] = [];
+  
+  // If user provides tags, use those exclusively
+  if (userTags && userTags.length > 0) {
+    return { runOnly: userTags };
+  }
+  
+  // Otherwise, use server configuration
+  tags.push(serverConfig.wcagVersion);
+  
+  if (serverConfig.includeBestPractices) {
+    tags.push("best-practice");
+  }
+  
+  const options: any = { runOnly: tags };
+  
+  if (serverConfig.runExperimental) {
+    options.runExperimental = true;
+  }
+  
+  return options;
+}
+
 // Type definitions for axe-core results
 interface AxeResultNode {
   html: string;
@@ -280,12 +331,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       // Run axe
-      const results = await page.evaluate((runTags) => {
+      const axeOptions = buildAxeOptions(tags);
+      const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
           // @ts-ignore - axe is injected globally
-          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+          axe.run(options).then(resolve);
         });
-      }, tags);
+      }, axeOptions);
 
       const axeResults = results as AxeResults;
 
@@ -324,12 +376,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       // Run axe
-      const results = await page.evaluate((runTags) => {
+      const axeOptions = buildAxeOptions(tags);
+      const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
           // @ts-ignore - axe is injected globally
-          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+          axe.run(options).then(resolve);
         });
-      }, tags);
+      }, axeOptions);
 
       const formattedResults = formatAxeResults(results as AxeResults);
 
@@ -368,12 +421,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       });
 
       // Run axe
-      const results = await page.evaluate((runTags) => {
+      const axeOptions = buildAxeOptions(tags);
+      const results = await page.evaluate((options) => {
         return new Promise((resolve) => {
           // @ts-ignore - axe is injected globally
-          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+          axe.run(options).then(resolve);
         });
-      }, tags);
+      }, axeOptions);
 
       const axeResults = results as AxeResults;
 
