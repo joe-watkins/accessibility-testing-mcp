@@ -85,49 +85,6 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-## Usage Examples
-
-### Test a URL with default engine
-```json
-{
-  "name": "analyze_url",
-  "arguments": { "url": "https://example.com" }
-}
-```
-
-### Test with specific engine
-```json
-{
-  "name": "analyze_url",
-  "arguments": {
-    "url": "https://example.com",
-    "engine": "ace"
-  }
-}
-```
-
-### Test HTML content
-```json
-{
-  "name": "analyze_html",
-  "arguments": {
-    "html": "<img src='photo.jpg'>",
-    "engine": "axe"
-  }
-}
-```
-
-### Override WCAG level per request
-```json
-{
-  "name": "analyze_url",
-  "arguments": {
-    "url": "https://example.com",
-    "tags": ["wcag22aa", "best-practice"]
-  }
-}
-```
-
 ## Choosing an Engine
 
 | Use Case | Recommended Engine |
@@ -135,7 +92,6 @@ Add to `claude_desktop_config.json`:
 | CI/CD pipelines | Axe-core |
 | Zero false positives needed | Axe-core |
 | Comprehensive audits | IBM Equal Access |
-| IBM product development | IBM Equal Access |
 | Enterprise compliance | IBM Equal Access |
 | Quick spot checks | Either |
 
