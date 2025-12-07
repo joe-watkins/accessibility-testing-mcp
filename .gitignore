@@ -5,3 +5,7 @@ dist/
 .DS_Store
 .env
 *.tsbuildinfo
+
+# Test output and examples
+results/
+examples/
