@@ -10,7 +10,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { chromium, Browser, Page } from "playwright";
+import puppeteer, { Browser, Page } from "puppeteer";
 import type { AxeResults } from "axe-core";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -26,107 +26,53 @@ const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 // Engine types
 type Engine = "axe" | "ace";
 
-// Normalized WCAG levels that work for both engines
-type WcagLevel = "2.0_A" | "2.0_AA" | "2.0_AAA" | "2.1_A" | "2.1_AA" | "2.1_AAA" | "2.2_A" | "2.2_AA" | "2.2_AAA";
-
-// Mapping from normalized WCAG level to engine-specific values
-const WCAG_LEVEL_MAP: Record<WcagLevel, { axeTags: string[]; acePolicy: string }> = {
-  "2.0_A":   { axeTags: ["wcag2a"],   acePolicy: "WCAG_2_0" },
-  "2.0_AA":  { axeTags: ["wcag2a", "wcag2aa"],  acePolicy: "WCAG_2_0" },
-  "2.0_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa"], acePolicy: "WCAG_2_0" },
-  "2.1_A":   { axeTags: ["wcag2a", "wcag21a"],  acePolicy: "WCAG_2_1" },
-  "2.1_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], acePolicy: "WCAG_2_1" },
-  "2.1_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa"], acePolicy: "WCAG_2_1" },
-  "2.2_A":   { axeTags: ["wcag2a", "wcag21a", "wcag22a"], acePolicy: "WCAG_2_2" },
-  "2.2_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"], acePolicy: "WCAG_2_2" },
-  "2.2_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa", "wcag22a", "wcag22aa", "wcag22aaa"], acePolicy: "WCAG_2_2" },
-};
-
 // Environment-based configuration with defaults
 const DEFAULT_ENGINE: Engine = "axe";
-const DEFAULT_WCAG_LEVEL: WcagLevel = "2.1_AA";
+const DEFAULT_WCAG_VERSION = "wcag2aa";
 const DEFAULT_RUN_EXPERIMENTAL = false;
 const DEFAULT_BEST_PRACTICES = true;
-const DEFAULT_RUN_PLAYWRIGHT_TESTS = false;
-const DEFAULT_PLAYWRIGHT_HEADLESS = true;
+
+// ACE-specific defaults
+const DEFAULT_ACE_POLICIES = ["IBM_Accessibility"];
+const DEFAULT_ACE_REPORT_LEVELS = ["violation", "potentialviolation", "recommendation"];
 
 interface ServerConfig {
   engine: Engine;
-  wcagLevel: WcagLevel;
+  // Axe settings
+  wcagVersion: string;
   runExperimental: boolean;
   includeBestPractices: boolean;
+  // ACE settings
+  acePolicies: string[];
   aceReportLevels: string[];
-  runPlaywrightTests: boolean;
-  playwrightHeadless: boolean;
-}
-
-// Parse WCAG_LEVEL env var with flexible input formats
-function parseWcagLevel(input: string | undefined): WcagLevel {
-  if (!input) return DEFAULT_WCAG_LEVEL;
-  
-  // Normalize input: remove spaces, convert to uppercase for level
-  const normalized = input.trim().toLowerCase()
-    .replace(/wcag\s*/i, "")      // Remove "WCAG" prefix
-    .replace(/\s+/g, "_")          // Replace spaces with underscore
-    .replace(/level\s*/i, "")      // Remove "level" word
-    .replace(/_+/g, "_");          // Clean up multiple underscores
-  
-  // Try to match patterns like "2.1_aa", "21aa", "2.1 AA", etc.
-  const match = normalized.match(/^(\d)\.?(\d)?[_\s]*(a{1,3})$/i);
-  if (match) {
-    const major = match[1];
-    const minor = match[2] || "0";
-    const level = match[3].toUpperCase();
-    const key = `${major}.${minor}_${level}` as WcagLevel;
-    if (key in WCAG_LEVEL_MAP) return key;
-  }
-  
-  // Direct match attempt
-  if (input in WCAG_LEVEL_MAP) return input as WcagLevel;
-  
-  // Fallback to default
-  console.error(`Invalid WCAG_LEVEL "${input}", using default "${DEFAULT_WCAG_LEVEL}"`);
-  return DEFAULT_WCAG_LEVEL;
 }
 
 // Load configuration from environment variables
 function loadConfig(): ServerConfig {
   const engine = (process.env.A11Y_ENGINE?.toLowerCase() as Engine) || DEFAULT_ENGINE;
-  const wcagLevel = parseWcagLevel(process.env.WCAG_LEVEL);
-  const runExperimental = process.env.RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
-  const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
-  const runPlaywrightTests = process.env.RUN_PLAYWRIGHT_TESTS === "true" || DEFAULT_RUN_PLAYWRIGHT_TESTS;
-  const playwrightHeadless = process.env.PLAYWRIGHT_HEADLESS !== "false" && DEFAULT_PLAYWRIGHT_HEADLESS;
+  const wcagVersion = process.env.AXE_WCAG_VERSION || DEFAULT_WCAG_VERSION;
+  const runExperimental = process.env.AXE_RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
+  const includeBestPractices = process.env.AXE_BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
   
-  // Build ACE report levels based on BEST_PRACTICES (recommendations = best practices for ACE)
+  // ACE settings
+  const acePolicies = process.env.ACE_POLICIES 
+    ? process.env.ACE_POLICIES.split(",").map(p => p.trim())
+    : DEFAULT_ACE_POLICIES;
   const aceReportLevels = process.env.ACE_REPORT_LEVELS
     ? process.env.ACE_REPORT_LEVELS.split(",").map(l => l.trim())
-    : includeBestPractices 
-      ? ["violation", "potentialviolation", "recommendation"]
-      : ["violation", "potentialviolation"];
+    : DEFAULT_ACE_REPORT_LEVELS;
 
   return {
     engine,
-    wcagLevel,
+    wcagVersion,
     runExperimental,
     includeBestPractices,
+    acePolicies,
     aceReportLevels,
-    runPlaywrightTests,
-    playwrightHeadless,
   };
 }
 
 const serverConfig = loadConfig();
-
-// Get axe tags for current WCAG level
-function getAxeTags(): string[] {
-  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].axeTags;
-}
-
-// Get ACE policy for current WCAG level
-function getAcePolicy(): string {
-  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].acePolicy;
-}
 
 // Helper function to build axe run options
 function buildAxeOptions(userTags?: string[]): any {
@@ -138,7 +84,7 @@ function buildAxeOptions(userTags?: string[]): any {
   }
   
   // Otherwise, use server configuration
-  tags.push(...getAxeTags());
+  tags.push(serverConfig.wcagVersion);
   
   if (serverConfig.includeBestPractices) {
     tags.push("best-practice");
@@ -217,7 +163,7 @@ interface ACEReport {
 const server = new Server(
   {
     name: "accessibility-testing-mcp",
-    version: "3.0.0",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -373,12 +319,7 @@ async function runACEAnalysis(content: string, label: string, policies?: string[
   // Dynamic import for accessibility-checker (ESM compatibility)
   const aChecker = await import("accessibility-checker");
   
-  // Use provided policies, or derive from WCAG_LEVEL config
-  const effectivePolicies = policies || [getAcePolicy()];
-  
   try {
-    // Note: accessibility-checker uses .achecker.yml or defaults
-    // We pass the content and let it use its configuration
     const result = await aChecker.getCompliance(content, label);
     return result.report as unknown as ACEReport;
   } finally {
@@ -386,296 +327,15 @@ async function runACEAnalysis(content: string, label: string, policies?: string[
   }
 }
 
-// Keyboard accessibility testing types
-interface KeyboardTrap {
-  selector: string;
-  html: string;
-  issue: string;
-}
-
-interface UnfocusableElement {
-  selector: string;
-  html: string;
-  role: string;
-}
-
-interface FocusOrderItem {
-  index: number;
-  selector: string;
-  html: string;
-  tagName: string;
-}
-
-interface KeyboardTestResult {
-  totalFocusableElements: number;
-  testedElements: number;
-  keyboardTraps: KeyboardTrap[];
-  unfocusableInteractive: UnfocusableElement[];
-  focusOrder: FocusOrderItem[];
-}
-
-// Run keyboard accessibility tests using Playwright
-async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
-  // Block navigation to keep testing on the same page
-  await page.route('**/*', async (route) => {
-    const request = route.request();
-    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-      // Only block navigation that would leave the current page
-      const currentUrl = page.url();
-      const requestUrl = request.url();
-      if (currentUrl !== requestUrl && !requestUrl.startsWith('data:')) {
-        await route.abort();
-        return;
-      }
-    }
-    await route.continue();
-  });
-
-  // Get all focusable elements
-  const focusableElements = await page.evaluate(() => {
-    const focusableSelectors = [
-      'a[href]',
-      'button:not([disabled])',
-      'input:not([disabled]):not([type="hidden"])',
-      'select:not([disabled])',
-      'textarea:not([disabled])',
-      '[tabindex]:not([tabindex="-1"])',
-      'audio[controls]',
-      'video[controls]',
-      '[contenteditable]:not([contenteditable="false"])'
-    ];
-
-    const elements = document.querySelectorAll(focusableSelectors.join(','));
-    const visible = Array.from(elements).filter(el => {
-      const style = window.getComputedStyle(el as HTMLElement);
-      const rect = el.getBoundingClientRect();
-      return style.display !== 'none' && 
-             style.visibility !== 'hidden' && 
-             style.opacity !== '0' &&
-             rect.width > 0 &&
-             rect.height > 0;
-    });
-
-    return visible.map((el) => ({
-      selector: el.tagName.toLowerCase() + (el.id ? `#${el.id}` : '') + ((el as HTMLElement).className ? `.${(el as HTMLElement).className.toString().split(' ').filter(c => c).join('.')}` : ''),
-      html: (el as HTMLElement).outerHTML.substring(0, 150),
-      tagName: el.tagName.toLowerCase(),
-      tabIndex: (el as HTMLElement).tabIndex,
-      role: (el as HTMLElement).getAttribute('role') || '',
-    }));
-  });
-
-  const result: KeyboardTestResult = {
-    totalFocusableElements: focusableElements.length,
-    testedElements: 0,
-    keyboardTraps: [],
-    unfocusableInteractive: [],
-    focusOrder: [],
-  };
-
-  // Test keyboard navigation by tabbing through elements
-  let previousFocusedSelector: string | null = null;
-  let trapDetectionCount = 0;
-  const maxTabs = Math.min(focusableElements.length + 10, 150); // Safety limit
-
-  // Focus on body first to start clean
-  await page.evaluate(() => {
-    (document.activeElement as HTMLElement)?.blur();
-    document.body.focus();
-  });
-
-  for (let i = 0; i < maxTabs; i++) {
-    await page.keyboard.press('Tab');
-    await page.waitForTimeout(150); // Brief pause for focus to settle
-
-    const currentFocused = await page.evaluate(() => {
-      const el = document.activeElement;
-      if (!el || el === document.body || el === document.documentElement) return null;
-      return {
-        selector: el.tagName.toLowerCase() + (el.id ? `#${el.id}` : '') + ((el as HTMLElement).className ? `.${(el as HTMLElement).className.toString().split(' ').filter(c => c).join('.')}` : ''),
-        html: (el as HTMLElement).outerHTML.substring(0, 150),
-        tagName: el.tagName.toLowerCase(),
-      };
-    });
-
-    if (currentFocused) {
-      result.focusOrder.push({
-        index: result.testedElements + 1,
-        selector: currentFocused.selector,
-        html: currentFocused.html,
-        tagName: currentFocused.tagName,
-      });
-
-      // Check for keyboard trap (stuck on same element)
-      if (previousFocusedSelector === currentFocused.selector) {
-        trapDetectionCount++;
-        if (trapDetectionCount >= 3) {
-          result.keyboardTraps.push({
-            selector: currentFocused.selector,
-            html: currentFocused.html,
-            issue: 'Focus is trapped on this element - cannot Tab away after multiple attempts',
-          });
-          break; // Exit to prevent infinite loop
-        }
-      } else {
-        trapDetectionCount = 0;
-      }
-
-      previousFocusedSelector = currentFocused.selector;
-      result.testedElements++;
-
-      // Stop if we've cycled back to the beginning (detected by seeing first element again)
-      if (result.testedElements > focusableElements.length) {
-        break;
-      }
-    } else {
-      // Focus went to body or unfocusable element
-      trapDetectionCount = 0;
-      previousFocusedSelector = null;
-    }
-  }
-
-  // Check for interactive elements that aren't keyboard focusable
-  const unfocusable = await page.evaluate(() => {
-    const interactive = document.querySelectorAll('[onclick], [onkeydown], [onkeyup], [role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="checkbox"], [role="radio"]');
-    const unfocusableElements: Array<{ selector: string; html: string; role: string }> = [];
-
-    interactive.forEach(el => {
-      const htmlEl = el as HTMLElement;
-      const tagName = htmlEl.tagName.toLowerCase();
-      const tabIndex = htmlEl.tabIndex;
-      const role = htmlEl.getAttribute('role') || '';
-
-      // Check if it's not naturally focusable and doesn't have proper tabindex
-      const isNaturallyFocusable = ['a', 'button', 'input', 'select', 'textarea'].includes(tagName);
-      const hasHref = tagName === 'a' && htmlEl.hasAttribute('href');
-      
-      if (!isNaturallyFocusable && !hasHref && tabIndex < 0) {
-        // Check if visible
-        const style = window.getComputedStyle(htmlEl);
-        const rect = htmlEl.getBoundingClientRect();
-        if (style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0) {
-          unfocusableElements.push({
-            selector: tagName + (htmlEl.id ? `#${htmlEl.id}` : '') + (htmlEl.className ? `.${htmlEl.className.toString().split(' ').filter(c => c).join('.')}` : ''),
-            html: htmlEl.outerHTML.substring(0, 150),
-            role: role,
-          });
-        }
-      }
-    });
-
-    return unfocusableElements;
-  });
-
-  result.unfocusableInteractive = unfocusable;
-
-  return result;
-}
-
-// Format keyboard test results as markdown
-function formatKeyboardResults(result: KeyboardTestResult): string {
-  let output = `\n---\n\n# Keyboard Accessibility Test Results (Playwright)\n\n`;
-  output += `**Total Focusable Elements**: ${result.totalFocusableElements}\n`;
-  output += `**Elements Tested via Tab**: ${result.testedElements}\n\n`;
-
-  // Keyboard traps section
-  if (result.keyboardTraps.length > 0) {
-    output += `## ❌ Keyboard Traps Found (${result.keyboardTraps.length})\n\n`;
-    output += `*WCAG 2.1.2 No Keyboard Trap - Level A*\n\n`;
-    result.keyboardTraps.forEach((trap, i) => {
-      output += `### ${i + 1}. ${trap.selector}\n`;
-      output += `**Issue**: ${trap.issue}\n`;
-      output += `**HTML**: \`${trap.html}\`\n`;
-      output += `**How to fix**: Ensure users can navigate away from this element using only the keyboard. If a modal or widget traps focus intentionally, provide a keyboard-accessible way to close/exit it.\n\n`;
-    });
-  } else {
-    output += `## ✅ No Keyboard Traps Detected\n\n`;
-    output += `All focusable elements allow keyboard navigation away via Tab key.\n\n`;
-  }
-
-  // Unfocusable interactive elements section
-  if (result.unfocusableInteractive.length > 0) {
-    output += `## ⚠️ Interactive Elements Not Keyboard Accessible (${result.unfocusableInteractive.length})\n\n`;
-    output += `*WCAG 2.1.1 Keyboard - Level A*\n\n`;
-    output += `These elements have interactive handlers or ARIA roles but are not keyboard focusable:\n\n`;
-    result.unfocusableInteractive.forEach((el, i) => {
-      output += `### ${i + 1}. ${el.selector}\n`;
-      output += `**Role**: ${el.role || 'none'}\n`;
-      output += `**HTML**: \`${el.html}\`\n`;
-      output += `**How to fix**: Add \`tabindex="0"\` to make this element focusable, or use a natively focusable element like \`<button>\` instead.\n\n`;
-    });
-  } else {
-    output += `## ✅ All Interactive Elements Are Keyboard Accessible\n\n`;
-  }
-
-  // Focus order section (condensed)
-  output += `## Focus Order (First 20 Elements)\n\n`;
-  if (result.focusOrder.length > 0) {
-    const displayItems = result.focusOrder.slice(0, 20);
-    displayItems.forEach((el) => {
-      output += `${el.index}. \`${el.tagName}\` - ${el.selector}\n`;
-    });
-    if (result.focusOrder.length > 20) {
-      output += `\n*... and ${result.focusOrder.length - 20} more elements*\n`;
-    }
-  } else {
-    output += `No focusable elements found or focus could not be tracked.\n`;
-  }
-  output += `\n`;
-
-  return output;
-}
-
-// Convert keyboard test results to axe-like violation format for JSON output
-function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
-  const violations: any[] = [];
-
-  // Keyboard traps as violations
-  if (result.keyboardTraps.length > 0) {
-    violations.push({
-      id: "keyboard-trap",
-      impact: "critical",
-      tags: ["wcag2a", "wcag211", "keyboard"],
-      description: "Ensure keyboard focus is not trapped on an element",
-      help: "Focus must not be trapped in any component",
-      helpUrl: "https://www.w3.org/WAI/WCAG21/Understanding/no-keyboard-trap.html",
-      nodes: result.keyboardTraps.map(trap => ({
-        html: trap.html,
-        target: [trap.selector],
-        failureSummary: trap.issue
-      }))
-    });
-  }
-
-  // Unfocusable interactive elements as violations
-  if (result.unfocusableInteractive.length > 0) {
-    violations.push({
-      id: "interactive-not-focusable",
-      impact: "serious",
-      tags: ["wcag2a", "wcag211", "keyboard"],
-      description: "Interactive elements must be keyboard accessible",
-      help: "Elements with interactive handlers or roles must be focusable",
-      helpUrl: "https://www.w3.org/WAI/WCAG21/Understanding/keyboard.html",
-      nodes: result.unfocusableInteractive.map(el => ({
-        html: el.html,
-        target: [el.selector],
-        failureSummary: `Element with role="${el.role || 'none'}" has interactive behavior but is not keyboard focusable. Add tabindex="0" or use a native interactive element.`
-      }))
-    });
-  }
-
-  return violations;
-}
-
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const configNote = `Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}`;
+  const engineNote = `Current default engine: ${serverConfig.engine}. Set A11Y_ENGINE env var to 'axe' or 'ace' to change.`;
   
   return {
     tools: [
       {
         name: "analyze_url",
-        description: `Run accessibility tests on a URL and return detailed violation reports. [${configNote}]`,
+        description: `Run accessibility tests on a URL and return detailed violation reports. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -691,7 +351,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["url"],
@@ -699,7 +359,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_url_json",
-        description: `Run accessibility tests on a URL and return violations in raw JSON format. [${configNote}]`,
+        description: `Run accessibility tests on a URL and return violations in raw JSON format. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -715,7 +375,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["url"],
@@ -723,7 +383,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html",
-        description: `Run accessibility tests on raw HTML content. [${configNote}]`,
+        description: `Run accessibility tests on raw HTML content. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -739,7 +399,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["html"],
@@ -747,7 +407,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html_json",
-        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. [${configNote}]`,
+        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. ${engineNote}`,
         inputSchema: {
           type: "object",
           properties: {
@@ -763,7 +423,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "Override default tags/policies. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
+              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
             },
           },
           required: ["html"],
@@ -771,7 +431,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_rules",
-        description: `Get information about available accessibility rules for the specified engine. [${configNote}]`,
+        description: "Get information about available accessibility rules for the specified engine",
         inputSchema: {
           type: "object",
           properties: {
@@ -808,29 +468,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (engine === "ace") {
       // Use IBM Equal Access
       const report = await runACEAnalysis(url, `url-${Date.now()}`, tags);
-      let formattedResults = formatACEResults(report);
-      
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
-        try {
-          const page = await browser.newPage();
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT });
-          await page.waitForTimeout(2000);
-          const keyboardResults = await runKeyboardTests(page);
-          formattedResults += formatKeyboardResults(keyboardResults);
-        } finally {
-          await browser.close();
-        }
-      }
-      
+      const formattedResults = formatACEResults(report);
       return {
         content: [{ type: "text", text: formattedResults }],
       };
     }
 
-    // Use Axe-core with Playwright
-    const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
+    // Use Axe-core
+    const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.goto(url, { 
@@ -838,7 +483,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         timeout: NAVIGATION_TIMEOUT 
       });
       
-      await page.waitForTimeout(3000);
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       await page.addScriptTag({ path: AXE_CORE_PATH });
 
@@ -849,13 +494,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
       }, tags);
 
-      let formattedResults = formatAxeResults(results as AxeResults);
-
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const keyboardResults = await runKeyboardTests(page);
-        formattedResults += formatKeyboardResults(keyboardResults);
-      }
+      const formattedResults = formatAxeResults(results as AxeResults);
 
       return {
         content: [{ type: "text", text: formattedResults }],
@@ -875,30 +514,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (engine === "ace") {
       const report = await runACEAnalysis(url, `url-json-${Date.now()}`, tags);
-      let violations = aceToAxeViolationsFormat(report);
-      
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
-        try {
-          const page = await browser.newPage();
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT });
-          await page.waitForTimeout(2000);
-          const keyboardResults = await runKeyboardTests(page);
-          const keyboardViolations = keyboardToAxeViolationsFormat(keyboardResults);
-          violations = [...violations, ...keyboardViolations];
-        } finally {
-          await browser.close();
-        }
-      }
-      
+      const violations = aceToAxeViolationsFormat(report);
       return {
         content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
       };
     }
 
-    // Use Axe-core with Playwright
-    const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
+    const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.goto(url, { 
@@ -906,7 +528,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         timeout: NAVIGATION_TIMEOUT 
       });
       
-      await page.waitForTimeout(3000);
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
       await page.addScriptTag({ path: AXE_CORE_PATH });
 
@@ -919,17 +541,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }, axeOptions);
 
       const axeResults = results as AxeResults;
-      let violations = axeResults.violations;
-
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const keyboardResults = await runKeyboardTests(page);
-        const keyboardViolations = keyboardToAxeViolationsFormat(keyboardResults);
-        violations = [...violations, ...keyboardViolations];
-      }
 
       return {
-        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(axeResults.violations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -952,11 +566,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
+    const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
-        waitUntil: "networkidle",
+        waitUntil: "networkidle0",
         timeout: NAVIGATION_TIMEOUT 
       });
 
@@ -996,11 +610,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
+    const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
-        waitUntil: "networkidle",
+        waitUntil: "networkidle0",
         timeout: NAVIGATION_TIMEOUT 
       });
 
@@ -1030,11 +644,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (engine === "ace") {
       // ACE doesn't have a simple getRules API, provide policy info instead
       let output = `# IBM Equal Access Accessibility Rules\n\n`;
-      output += `## Current Configuration\n\n`;
-      output += `- **WCAG Level**: ${serverConfig.wcagLevel}\n`;
-      output += `- **Policy**: ${getAcePolicy()}\n`;
-      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
       output += `## Available Policies\n\n`;
+      output += `- **IBM_Accessibility**: IBM accessibility requirements (includes WCAG 2.1 AA)\n`;
       output += `- **WCAG_2_0**: WCAG 2.0 guidelines\n`;
       output += `- **WCAG_2_1**: WCAG 2.1 guidelines\n`;
       output += `- **WCAG_2_2**: WCAG 2.2 guidelines\n\n`;
@@ -1044,6 +655,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       output += `- **recommendation**: Suggested improvements\n`;
       output += `- **potentialrecommendation**: Possible improvements to review\n`;
       output += `- **manual**: Requires manual testing\n\n`;
+      output += `## Current Configuration\n\n`;
+      output += `- **Policies**: ${serverConfig.acePolicies.join(", ")}\n`;
+      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
       output += `For complete rule documentation, visit: https://www.ibm.com/able/requirements/checker-rule-sets\n`;
 
       return {
@@ -1051,7 +665,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await puppeteer.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent("<html><body></body></html>");
@@ -1147,11 +761,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - **wcag22aa**: WCAG 2.2 Level AA
 - **best-practice**: Best practices beyond WCAG requirements
 
-## IBM Equal Access (ACE) Policies
+## IBM Equal Access Policies
 
-- **WCAG_2_0**: WCAG 2.0 guidelines
-- **WCAG_2_1**: WCAG 2.1 guidelines (default)
-- **WCAG_2_2**: WCAG 2.2 guidelines
+- **IBM_Accessibility**: IBM's accessibility requirements (covers WCAG 2.1 AA)
+- **WCAG_2_1**: WCAG 2.1 specific rules
+- **WCAG_2_2**: WCAG 2.2 specific rules
 
 ## Four Principles of WCAG (POUR)
 
@@ -1232,6 +846,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - CI/CD integration
 - Projects requiring zero false positives
 
+**Configuration:**
+- AXE_WCAG_VERSION: wcag2a, wcag2aa, wcag21aa, etc.
+- AXE_BEST_PRACTICES: true/false
+- AXE_RUN_EXPERIMENTAL: true/false
+
 ## IBM Equal Access (ACE)
 
 **Strengths:**
@@ -1247,19 +866,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 - Thorough accessibility audits
 - Projects needing detailed guidance
 
-## Unified Configuration
-
-Both engines now use the same WCAG_LEVEL setting:
-
-**WCAG_LEVEL values:**
-- 2.0_A, 2.0_AA, 2.0_AAA
-- 2.1_A, 2.1_AA, 2.1_AAA (default: 2.1_AA)
-- 2.2_A, 2.2_AA, 2.2_AAA
-
-**Other settings:**
-- A11Y_ENGINE: axe (default) or ace
-- BEST_PRACTICES: true/false (axe only)
-- RUN_EXPERIMENTAL: true/false (axe only)
+**Configuration:**
+- ACE_POLICIES: IBM_Accessibility, WCAG_2_1, WCAG_2_2
 - ACE_REPORT_LEVELS: violation, potentialviolation, recommendation
 
 ## Choosing an Engine
@@ -1378,8 +986,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   
-  const playwrightStatus = serverConfig.runPlaywrightTests ? "Keyboard Tests: ON" : "Keyboard Tests: OFF";
-  console.error(`Accessibility Testing MCP Server v3.0.0 (Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}, ${playwrightStatus})`);
+  console.error(`Accessibility Testing MCP Server v2.0.0 running on stdio (Engine: ${serverConfig.engine})`);
 }
 
 main().catch((error) => {
