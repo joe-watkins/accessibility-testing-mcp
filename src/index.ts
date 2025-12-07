@@ -406,16 +406,37 @@ interface FocusOrderItem {
   tagName: string;
 }
 
+interface DialogEscape {
+  dialogSelector: string;
+  dialogHtml: string;
+  escapedSuccessfully: boolean;
+  note: string;
+}
+
+interface ButtonActivation {
+  selector: string;
+  html: string;
+  activated: boolean;
+  triggeredDialog: boolean;
+  expandedContent: boolean;
+  note: string;
+}
+
 interface KeyboardTestResult {
   totalFocusableElements: number;
   testedElements: number;
   keyboardTraps: KeyboardTrap[];
   unfocusableInteractive: UnfocusableElement[];
   focusOrder: FocusOrderItem[];
+  dialogEscapes: DialogEscape[];
+  buttonActivations: ButtonActivation[];
 }
 
 // Run keyboard accessibility tests using Playwright
 async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
+  // Wait 10 seconds for the page to settle and allow user to close any modal popups
+  await page.waitForTimeout(10000);
+
   // Block navigation to keep testing on the same page
   await page.route('**/*', async (route) => {
     const request = route.request();
@@ -471,18 +492,71 @@ async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
     keyboardTraps: [],
     unfocusableInteractive: [],
     focusOrder: [],
+    dialogEscapes: [],
+    buttonActivations: [],
   };
 
   // Test keyboard navigation by tabbing through elements
   let previousFocusedSelector: string | null = null;
   let trapDetectionCount = 0;
+  let dialogEscapeAttempts = 0;
+  const maxDialogEscapes = 5; // Maximum number of dialogs to try escaping
   const maxTabs = Math.min(focusableElements.length + 10, 150); // Safety limit
+  const navigationTriggeringSelectors = new Set<string>(); // Track buttons that cause navigation to skip them
+
+  // Helper function to check if focus is inside a dialog/modal
+  const checkForDialog = async (): Promise<{ inDialog: boolean; dialogInfo: { selector: string; html: string } | null }> => {
+    return await page.evaluate(() => {
+      const activeElement = document.activeElement as HTMLElement;
+      if (!activeElement) return { inDialog: false, dialogInfo: null };
+
+      // Check if active element or any ancestor is a dialog/modal
+      let current: HTMLElement | null = activeElement;
+      while (current && current !== document.body) {
+        const role = current.getAttribute('role');
+        const ariaModal = current.getAttribute('aria-modal');
+        const tagName = current.tagName.toLowerCase();
+        
+        // Detect various dialog patterns
+        const isDialog = 
+          role === 'dialog' ||
+          role === 'alertdialog' ||
+          ariaModal === 'true' ||
+          tagName === 'dialog' ||
+          current.classList.contains('modal') ||
+          current.classList.contains('dialog') ||
+          current.classList.contains('popup') ||
+          current.classList.contains('overlay') ||
+          current.id?.toLowerCase().includes('modal') ||
+          current.id?.toLowerCase().includes('dialog');
+
+        if (isDialog) {
+          return {
+            inDialog: true,
+            dialogInfo: {
+              selector: tagName + (current.id ? `#${current.id}` : '') + (current.className ? `.${current.className.toString().split(' ').filter(c => c).join('.')}` : ''),
+              html: current.outerHTML.substring(0, 200),
+            }
+          };
+        }
+        current = current.parentElement;
+      }
+      return { inDialog: false, dialogInfo: null };
+    });
+  };
+
+  // Helper function to reset focus to start of document
+  const resetFocusToStart = async () => {
+    await page.evaluate(() => {
+      (document.activeElement as HTMLElement)?.blur();
+      document.body.focus();
+    });
+    // Give the page time to settle
+    await page.waitForTimeout(200);
+  };
 
   // Focus on body first to start clean
-  await page.evaluate(() => {
-    (document.activeElement as HTMLElement)?.blur();
-    document.body.focus();
-  });
+  await resetFocusToStart();
 
   for (let i = 0; i < maxTabs; i++) {
     await page.keyboard.press('Tab');
@@ -506,16 +580,188 @@ async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
         tagName: currentFocused.tagName,
       });
 
+      // Activate buttons (not links) to test functionality
+      // Skip links as they would navigate away from the page
+      // Also skip buttons that previously caused navigation
+      if ((currentFocused.tagName === 'button' || 
+          await page.evaluate(() => {
+            const el = document.activeElement as HTMLElement;
+            const role = el?.getAttribute('role');
+            return role === 'button' || role === 'tab' || role === 'menuitem' || 
+                   el?.getAttribute('aria-expanded') !== null ||
+                   el?.getAttribute('aria-pressed') !== null;
+          })) && !navigationTriggeringSelectors.has(currentFocused.selector)) {
+        
+        // Get state before activation
+        const beforeState = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement;
+          return {
+            ariaExpanded: el?.getAttribute('aria-expanded'),
+            ariaPressed: el?.getAttribute('aria-pressed'),
+            ariaSelected: el?.getAttribute('aria-selected'),
+          };
+        });
+
+        // Store the original URL before activation
+        const originalUrl = page.url();
+
+        // Activate the button with Enter key
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(400); // Wait for any animations/dialogs to open
+
+        // Check if URL changed (button caused navigation)
+        const currentUrl = page.url();
+        if (currentUrl !== originalUrl) {
+          // Track this selector so we don't click it again
+          navigationTriggeringSelectors.add(currentFocused.selector);
+          
+          // Navigate back to the original URL to continue testing
+          await page.goto(originalUrl, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
+          await page.waitForTimeout(500); // Wait for page to settle
+          
+          // Reset focus to continue testing
+          await resetFocusToStart();
+          
+          // Record that this button caused navigation
+          const activation: ButtonActivation = {
+            selector: currentFocused.selector,
+            html: currentFocused.html,
+            activated: true,
+            triggeredDialog: false,
+            expandedContent: false,
+            note: 'Button caused URL navigation - returned to original page to continue testing',
+          };
+          result.buttonActivations.push(activation);
+          
+          // Skip further processing for this button since we had to navigate back
+          previousFocusedSelector = null;
+          trapDetectionCount = 0;
+          result.testedElements++;
+          continue;
+        }
+
+        // Check if a dialog opened
+        const dialogAfterActivation = await checkForDialog();
+        
+        // Get state after activation
+        const afterState = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement;
+          return {
+            ariaExpanded: el?.getAttribute('aria-expanded'),
+            ariaPressed: el?.getAttribute('aria-pressed'),
+            ariaSelected: el?.getAttribute('aria-selected'),
+          };
+        });
+
+        // Determine what happened
+        const expandedContent = beforeState.ariaExpanded !== afterState.ariaExpanded ||
+                               beforeState.ariaPressed !== afterState.ariaPressed ||
+                               beforeState.ariaSelected !== afterState.ariaSelected;
+
+        const activation: ButtonActivation = {
+          selector: currentFocused.selector,
+          html: currentFocused.html,
+          activated: true,
+          triggeredDialog: dialogAfterActivation.inDialog,
+          expandedContent: expandedContent,
+          note: dialogAfterActivation.inDialog 
+            ? 'Button triggered a dialog/modal'
+            : expandedContent 
+              ? 'Button toggled expanded/pressed state'
+              : 'Button activated (no visible state change)',
+        };
+        result.buttonActivations.push(activation);
+
+        // If a dialog opened, close it with Escape
+        if (dialogAfterActivation.inDialog && dialogAfterActivation.dialogInfo) {
+          await page.keyboard.press('Escape');
+          await page.waitForTimeout(300);
+
+          const stillInDialog = await checkForDialog();
+          const escapeResult: DialogEscape = {
+            dialogSelector: dialogAfterActivation.dialogInfo.selector,
+            dialogHtml: dialogAfterActivation.dialogInfo.html,
+            escapedSuccessfully: !stillInDialog.inDialog,
+            note: stillInDialog.inDialog 
+              ? 'Dialog opened by button could not be closed with Escape key'
+              : 'Successfully closed dialog opened by button activation',
+          };
+          result.dialogEscapes.push(escapeResult);
+
+          if (!stillInDialog.inDialog) {
+            // Focus may have returned to the button or moved elsewhere
+            // Continue testing from current position
+          }
+        }
+
+        // If content was expanded (accordion), collapse it to restore state
+        if (expandedContent && !dialogAfterActivation.inDialog) {
+          // Press Enter again to collapse
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(200);
+        }
+      }
+
       // Check for keyboard trap (stuck on same element)
       if (previousFocusedSelector === currentFocused.selector) {
         trapDetectionCount++;
         if (trapDetectionCount >= 3) {
-          result.keyboardTraps.push({
-            selector: currentFocused.selector,
-            html: currentFocused.html,
-            issue: 'Focus is trapped on this element - cannot Tab away after multiple attempts',
-          });
-          break; // Exit to prevent infinite loop
+          // Before marking as trap, check if we're in a dialog and try to escape
+          const dialogCheck = await checkForDialog();
+          
+          if (dialogCheck.inDialog && dialogCheck.dialogInfo && dialogEscapeAttempts < maxDialogEscapes) {
+            // Try pressing Escape to close the dialog
+            await page.keyboard.press('Escape');
+            await page.waitForTimeout(300); // Wait for dialog to close
+            
+            dialogEscapeAttempts++;
+            
+            // Check if we escaped successfully
+            const stillInDialog = await checkForDialog();
+            const escapeResult: DialogEscape = {
+              dialogSelector: dialogCheck.dialogInfo.selector,
+              dialogHtml: dialogCheck.dialogInfo.html,
+              escapedSuccessfully: !stillInDialog.inDialog,
+              note: stillInDialog.inDialog 
+                ? 'Dialog did not close with Escape key - may be intentional or a keyboard trap'
+                : 'Successfully closed dialog with Escape key',
+            };
+            result.dialogEscapes.push(escapeResult);
+
+            if (!stillInDialog.inDialog) {
+              // Successfully escaped! Check if focus is logical
+              const focusAfterEscape = await page.evaluate(() => {
+                const el = document.activeElement;
+                return el && el !== document.body && el !== document.documentElement;
+              });
+
+              if (!focusAfterEscape) {
+                // Focus is not on a logical element, reset to start
+                await resetFocusToStart();
+              }
+
+              // Reset trap detection and continue testing
+              trapDetectionCount = 0;
+              previousFocusedSelector = null;
+              continue;
+            } else {
+              // Could not escape - this is a real keyboard trap
+              result.keyboardTraps.push({
+                selector: currentFocused.selector,
+                html: currentFocused.html,
+                issue: 'Focus is trapped in a dialog that cannot be closed with Escape key',
+              });
+              break;
+            }
+          } else {
+            // Not in a dialog, or exceeded escape attempts - real keyboard trap
+            result.keyboardTraps.push({
+              selector: currentFocused.selector,
+              html: currentFocused.html,
+              issue: 'Focus is trapped on this element - cannot Tab away after multiple attempts',
+            });
+            break; // Exit to prevent infinite loop
+          }
         }
       } else {
         trapDetectionCount = 0;
@@ -576,7 +822,82 @@ async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
 function formatKeyboardResults(result: KeyboardTestResult): string {
   let output = `\n---\n\n# Keyboard Accessibility Test Results (Playwright)\n\n`;
   output += `**Total Focusable Elements**: ${result.totalFocusableElements}\n`;
-  output += `**Elements Tested via Tab**: ${result.testedElements}\n\n`;
+  output += `**Elements Tested via Tab**: ${result.testedElements}\n`;
+  if (result.buttonActivations.length > 0) {
+    output += `**Buttons Activated**: ${result.buttonActivations.length}\n`;
+  }
+  if (result.dialogEscapes.length > 0) {
+    output += `**Dialogs Encountered**: ${result.dialogEscapes.length}\n`;
+  }
+  output += `\n`;
+
+  // Button activation section
+  if (result.buttonActivations.length > 0) {
+    const dialogTriggers = result.buttonActivations.filter(b => b.triggeredDialog);
+    const expandables = result.buttonActivations.filter(b => b.expandedContent && !b.triggeredDialog);
+    const otherButtons = result.buttonActivations.filter(b => !b.triggeredDialog && !b.expandedContent);
+
+    output += `## 🔘 Button Activation Results\n\n`;
+    
+    if (dialogTriggers.length > 0) {
+      output += `### Buttons That Opened Dialogs (${dialogTriggers.length})\n`;
+      dialogTriggers.slice(0, 10).forEach((btn, i) => {
+        output += `${i + 1}. \`${btn.selector}\`\n`;
+      });
+      if (dialogTriggers.length > 10) {
+        output += `*... and ${dialogTriggers.length - 10} more*\n`;
+      }
+      output += `\n`;
+    }
+
+    if (expandables.length > 0) {
+      output += `### Expandable Controls (Accordions/Toggles) (${expandables.length})\n`;
+      expandables.slice(0, 10).forEach((btn, i) => {
+        output += `${i + 1}. \`${btn.selector}\`\n`;
+      });
+      if (expandables.length > 10) {
+        output += `*... and ${expandables.length - 10} more*\n`;
+      }
+      output += `\n`;
+    }
+
+    if (otherButtons.length > 0) {
+      output += `### Other Buttons Activated (${otherButtons.length})\n`;
+      otherButtons.slice(0, 10).forEach((btn, i) => {
+        output += `${i + 1}. \`${btn.selector}\`\n`;
+      });
+      if (otherButtons.length > 10) {
+        output += `*... and ${otherButtons.length - 10} more*\n`;
+      }
+      output += `\n`;
+    }
+  }
+
+  // Dialog escapes section
+  if (result.dialogEscapes.length > 0) {
+    const successfulEscapes = result.dialogEscapes.filter(d => d.escapedSuccessfully);
+    const failedEscapes = result.dialogEscapes.filter(d => !d.escapedSuccessfully);
+    
+    if (successfulEscapes.length > 0) {
+      output += `## ℹ️ Dialogs Closed During Testing (${successfulEscapes.length})\n\n`;
+      output += `*These dialogs were detected and closed with Escape key to continue testing*\n\n`;
+      successfulEscapes.forEach((dialog, i) => {
+        output += `${i + 1}. \`${dialog.dialogSelector}\` - ${dialog.note}\n`;
+      });
+      output += `\n`;
+    }
+    
+    if (failedEscapes.length > 0) {
+      output += `## ⚠️ Dialogs That Could Not Be Closed (${failedEscapes.length})\n\n`;
+      output += `*WCAG 2.1.2 No Keyboard Trap - Level A*\n\n`;
+      failedEscapes.forEach((dialog, i) => {
+        output += `### ${i + 1}. ${dialog.dialogSelector}\n`;
+        output += `**Note**: ${dialog.note}\n`;
+        output += `**HTML**: \`${dialog.dialogHtml}\`\n`;
+        output += `**Recommendation**: Dialogs should be dismissible via Escape key for keyboard accessibility.\n\n`;
+      });
+    }
+  }
 
   // Keyboard traps section
   if (result.keyboardTraps.length > 0) {
@@ -635,7 +956,7 @@ function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
     violations.push({
       id: "keyboard-trap",
       impact: "critical",
-      tags: ["wcag2a", "wcag211", "keyboard"],
+      tags: ["wcag2a", "wcag212", "keyboard"],
       description: "Ensure keyboard focus is not trapped on an element",
       help: "Focus must not be trapped in any component",
       helpUrl: "https://www.w3.org/WAI/WCAG21/Understanding/no-keyboard-trap.html",
@@ -643,6 +964,24 @@ function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
         html: trap.html,
         target: [trap.selector],
         failureSummary: trap.issue
+      }))
+    });
+  }
+
+  // Dialogs that could not be closed as potential violations
+  const failedDialogEscapes = result.dialogEscapes.filter(d => !d.escapedSuccessfully);
+  if (failedDialogEscapes.length > 0) {
+    violations.push({
+      id: "dialog-not-escapable",
+      impact: "serious",
+      tags: ["wcag2a", "wcag212", "keyboard", "best-practice"],
+      description: "Dialogs should be dismissible with Escape key",
+      help: "Modal dialogs must provide a keyboard-accessible way to close them",
+      helpUrl: "https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/",
+      nodes: failedDialogEscapes.map(dialog => ({
+        html: dialog.dialogHtml,
+        target: [dialog.dialogSelector],
+        failureSummary: dialog.note
       }))
     });
   }
