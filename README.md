@@ -2,18 +2,20 @@
 
 An MCP server for accessibility testing using **axe-core** and **IBM Equal Access**. Choose your testing engine or use both for comprehensive coverage.
 
-## Features
+## Example Prompts
+- "Test the accessibility of https://example.com"
+- "Test the accessibility of https://example.com" blockers only output issues in chat: What is the Issue, Who it Impacts, How to Fix, WCAG, Severity, Code Snippet"
 
-### 🔧 Dual Engine Support
+### Dual Engine Support
 
 - **Axe-core** (Deque) - Industry standard, zero false positives
 - **IBM Equal Access** - Comprehensive IBM accessibility requirements
 
-### 📐 Multi-Screen Testing
+### Multi-Screen Testing
 
 Test at multiple viewport sizes to catch responsive accessibility issues.
 
-### 🛠️ Tools
+### Tools
 
 | Tool | Description |
 |------|-------------|
@@ -25,11 +27,7 @@ Test at multiple viewport sizes to catch responsive accessibility issues.
 
 All tools accept an optional `engine` parameter (`"axe"` or `"ace"`).
 
-### 📚 Resources
-
-- **WCAG Guidelines Reference** - Levels, principles, and tags
-- **Common Accessibility Issues** - Frequent violations and fixes
-- **Engine Comparison** - When to use each engine
+### 
 
 ## Installation
 
