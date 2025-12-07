@@ -1,6 +1,6 @@
 {
   "name": "accessibility-testing-mcp",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "MCP server for accessibility testing using axe-core and IBM Equal Access",
   "type": "module",
   "main": "build/index.js",
@@ -11,7 +11,8 @@
     "build": "tsc",
     "watch": "tsc --watch",
     "start": "node build/index.js",
-    "dev": "tsc && node build/index.js"
+    "dev": "tsc && node build/index.js",
+    "postinstall": "npx playwright install chromium"
   },
   "keywords": [
     "mcp",
@@ -20,7 +21,9 @@
     "a11y",
     "axe-core",
     "ibm-equal-access",
-    "wcag"
+    "wcag",
+    "playwright",
+    "keyboard-testing"
   ],
   "author": "",
   "license": "MIT",
@@ -28,7 +31,7 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "accessibility-checker": "^4.0.9",
     "axe-core": "^4.11.0",
-    "puppeteer": "^24.24.0"
+    "playwright": "^1.49.0"
   },
   "devDependencies": {
     "@types/axe-core": "^2.0.2",
