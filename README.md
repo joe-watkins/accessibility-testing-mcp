@@ -127,7 +127,7 @@ Add to `claude_desktop_config.json`:
 - **@modelcontextprotocol/sdk** - MCP server framework
 - **axe-core** - Deque accessibility testing engine
 - **accessibility-checker** - IBM Equal Access engine
-- **puppeteer** - Headless browser automation
+- **playwright** - Headless browser automation
 
 ## License
 

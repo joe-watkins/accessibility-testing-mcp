@@ -10,7 +10,7 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import puppeteer, { Browser, Page } from "puppeteer";
+import { chromium, Browser, Page } from "playwright";
 import type { AxeResults } from "axe-core";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -552,17 +552,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     // Use Axe-core - test each screen size
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
       for (const screenSize of serverConfig.screenSizes) {
         const page = await browser.newPage();
-        await page.setViewport({ width: screenSize.width, height: screenSize.height });
+        await page.setViewportSize({ width: screenSize.width, height: screenSize.height });
         await page.goto(url, { 
           waitUntil: "domcontentloaded",
           timeout: NAVIGATION_TIMEOUT 
         });
         
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await page.waitForTimeout(3000);
 
         await page.addScriptTag({ path: AXE_CORE_PATH });
 
@@ -610,17 +610,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
       for (const screenSize of serverConfig.screenSizes) {
         const page = await browser.newPage();
-        await page.setViewport({ width: screenSize.width, height: screenSize.height });
+        await page.setViewportSize({ width: screenSize.width, height: screenSize.height });
         await page.goto(url, { 
           waitUntil: "domcontentloaded",
           timeout: NAVIGATION_TIMEOUT 
         });
         
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await page.waitForTimeout(3000);
 
         await page.addScriptTag({ path: AXE_CORE_PATH });
 
@@ -664,11 +664,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
-        waitUntil: "networkidle0",
+        waitUntil: "networkidle",
         timeout: NAVIGATION_TIMEOUT 
       });
 
@@ -708,11 +708,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
-        waitUntil: "networkidle0",
+        waitUntil: "networkidle",
         timeout: NAVIGATION_TIMEOUT 
       });
 
@@ -765,7 +765,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await puppeteer.launch({ headless: true });
+    const browser = await chromium.launch({ headless: true });
     try {
       const page = await browser.newPage();
       await page.setContent("<html><body></body></html>");
