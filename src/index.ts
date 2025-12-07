@@ -49,6 +49,13 @@ const DEFAULT_RUN_EXPERIMENTAL = false;
 const DEFAULT_BEST_PRACTICES = true;
 const DEFAULT_RUN_PLAYWRIGHT_TESTS = false;
 const DEFAULT_PLAYWRIGHT_HEADLESS = true;
+const DEFAULT_SCREEN_SIZES: ScreenSize[] = [{ width: 1280, height: 1024 }];
+
+// Screen size type
+interface ScreenSize {
+  width: number;
+  height: number;
+}
 
 interface ServerConfig {
   engine: Engine;
@@ -58,6 +65,29 @@ interface ServerConfig {
   aceReportLevels: string[];
   runPlaywrightTests: boolean;
   playwrightHeadless: boolean;
+  screenSizes: ScreenSize[];
+}
+
+// Parse SCREEN_SIZES env var (format: "1280x1024,320x640")
+function parseScreenSizes(input: string | undefined): ScreenSize[] {
+  if (!input) return DEFAULT_SCREEN_SIZES;
+  
+  const sizes: ScreenSize[] = [];
+  const parts = input.split(',').map(s => s.trim());
+  
+  for (const part of parts) {
+    const match = part.match(/^(\d+)x(\d+)$/i);
+    if (match) {
+      sizes.push({
+        width: parseInt(match[1], 10),
+        height: parseInt(match[2], 10)
+      });
+    } else {
+      console.error(`Invalid screen size format "${part}", expected format like "1280x1024"`);
+    }
+  }
+  
+  return sizes.length > 0 ? sizes : DEFAULT_SCREEN_SIZES;
 }
 
 // Parse WCAG_LEVEL env var with flexible input formats
@@ -97,6 +127,7 @@ function loadConfig(): ServerConfig {
   const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
   const runPlaywrightTests = process.env.RUN_PLAYWRIGHT_TESTS === "true" || DEFAULT_RUN_PLAYWRIGHT_TESTS;
   const playwrightHeadless = process.env.PLAYWRIGHT_HEADLESS !== "false" && DEFAULT_PLAYWRIGHT_HEADLESS;
+  const screenSizes = parseScreenSizes(process.env.SCREEN_SIZES);
   
   // Build ACE report levels based on BEST_PRACTICES (recommendations = best practices for ACE)
   const aceReportLevels = process.env.ACE_REPORT_LEVELS
@@ -113,6 +144,7 @@ function loadConfig(): ServerConfig {
     aceReportLevels,
     runPlaywrightTests,
     playwrightHeadless,
+    screenSizes,
   };
 }
 
@@ -228,8 +260,13 @@ const server = new Server(
   }
 );
 
+// Helper function to format screen size for display
+function formatScreenSize(size: ScreenSize): string {
+  return `${size.width}x${size.height}`;
+}
+
 // Helper function to format axe results
-function formatAxeResults(results: any): string {
+function formatAxeResults(results: any, screenSize?: ScreenSize): string {
   const violations = results.violations || [];
   const passes = results.passes || [];
   const incomplete = results.incomplete || [];
@@ -237,6 +274,9 @@ function formatAxeResults(results: any): string {
   
   let output = `# Accessibility Test Results (Axe-core)\n\n`;
   output += `**URL**: ${results.url}\n`;
+  if (screenSize) {
+    output += `**Screen Size**: ${formatScreenSize(screenSize)}\n`;
+  }
   output += `**Timestamp**: ${results.timestamp}\n\n`;
   output += `## Summary\n`;
   output += `- ✅ Passes: ${passes.length}\n`;
@@ -276,7 +316,7 @@ function formatAxeResults(results: any): string {
 }
 
 // Helper function to format ACE results
-function formatACEResults(report: ACEReport): string {
+function formatACEResults(report: ACEReport, screenSize?: ScreenSize): string {
   const { summary, results } = report;
   const violations = results.filter(r => r.level === "violation");
   const potentialViolations = results.filter(r => r.level === "potentialviolation");
@@ -285,6 +325,9 @@ function formatACEResults(report: ACEReport): string {
   
   let output = `# Accessibility Test Results (IBM Equal Access)\n\n`;
   output += `**URL**: ${summary.URL}\n`;
+  if (screenSize) {
+    output += `**Screen Size**: ${formatScreenSize(screenSize)}\n`;
+  }
   output += `**Scan Time**: ${summary.scanTime}ms\n`;
   output += `**Policies**: ${summary.policies.join(", ")}\n`;
   output += `**Rule Archive**: ${summary.ruleArchive}\n\n`;
@@ -339,10 +382,12 @@ function formatACEResults(report: ACEReport): string {
 }
 
 // Convert ACE results to Axe-like JSON format for consistency
-function aceToAxeViolationsFormat(report: ACEReport): any[] {
+function aceToAxeViolationsFormat(report: ACEReport, screenSize?: ScreenSize): any[] {
   const violations = report.results.filter(r => 
     r.level === "violation" || r.level === "potentialviolation"
   );
+  
+  const screenSizeLabel = screenSize ? ` (at ${formatScreenSize(screenSize)})` : '';
   
   // Group by ruleId
   const grouped = violations.reduce((acc, item) => {
@@ -354,13 +399,14 @@ function aceToAxeViolationsFormat(report: ACEReport): any[] {
         description: item.message,
         help: item.message,
         helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+        screenSize: screenSize ? formatScreenSize(screenSize) : undefined,
         nodes: []
       };
     }
     acc[item.ruleId].nodes.push({
       html: item.snippet,
       target: [item.path.dom],
-      failureSummary: item.message
+      failureSummary: item.message + screenSizeLabel
     });
     return acc;
   }, {} as Record<string, any>);
@@ -819,8 +865,11 @@ async function runKeyboardTests(page: Page): Promise<KeyboardTestResult> {
 }
 
 // Format keyboard test results as markdown
-function formatKeyboardResults(result: KeyboardTestResult): string {
+function formatKeyboardResults(result: KeyboardTestResult, screenSize?: ScreenSize): string {
   let output = `\n---\n\n# Keyboard Accessibility Test Results (Playwright)\n\n`;
+  if (screenSize) {
+    output += `**Screen Size**: ${formatScreenSize(screenSize)}\n`;
+  }
   output += `**Total Focusable Elements**: ${result.totalFocusableElements}\n`;
   output += `**Elements Tested via Tab**: ${result.testedElements}\n`;
   if (result.buttonActivations.length > 0) {
@@ -948,8 +997,9 @@ function formatKeyboardResults(result: KeyboardTestResult): string {
 }
 
 // Convert keyboard test results to axe-like violation format for JSON output
-function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
+function keyboardToAxeViolationsFormat(result: KeyboardTestResult, screenSize?: ScreenSize): any[] {
   const violations: any[] = [];
+  const screenSizeLabel = screenSize ? ` (at ${formatScreenSize(screenSize)})` : '';
 
   // Keyboard traps as violations
   if (result.keyboardTraps.length > 0) {
@@ -960,10 +1010,11 @@ function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
       description: "Ensure keyboard focus is not trapped on an element",
       help: "Focus must not be trapped in any component",
       helpUrl: "https://www.w3.org/WAI/WCAG21/Understanding/no-keyboard-trap.html",
+      screenSize: screenSize ? formatScreenSize(screenSize) : undefined,
       nodes: result.keyboardTraps.map(trap => ({
         html: trap.html,
         target: [trap.selector],
-        failureSummary: trap.issue
+        failureSummary: trap.issue + screenSizeLabel
       }))
     });
   }
@@ -978,10 +1029,11 @@ function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
       description: "Dialogs should be dismissible with Escape key",
       help: "Modal dialogs must provide a keyboard-accessible way to close them",
       helpUrl: "https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/",
+      screenSize: screenSize ? formatScreenSize(screenSize) : undefined,
       nodes: failedDialogEscapes.map(dialog => ({
         html: dialog.dialogHtml,
         target: [dialog.dialogSelector],
-        failureSummary: dialog.note
+        failureSummary: dialog.note + screenSizeLabel
       }))
     });
   }
@@ -995,10 +1047,11 @@ function keyboardToAxeViolationsFormat(result: KeyboardTestResult): any[] {
       description: "Interactive elements must be keyboard accessible",
       help: "Elements with interactive handlers or roles must be focusable",
       helpUrl: "https://www.w3.org/WAI/WCAG21/Understanding/keyboard.html",
+      screenSize: screenSize ? formatScreenSize(screenSize) : undefined,
       nodes: result.unfocusableInteractive.map(el => ({
         html: el.html,
         target: [el.selector],
-        failureSummary: `Element with role="${el.role || 'none'}" has interactive behavior but is not keyboard focusable. Add tabindex="0" or use a native interactive element.`
+        failureSummary: `Element with role="${el.role || 'none'}" has interactive behavior but is not keyboard focusable. Add tabindex="0" or use a native interactive element.${screenSizeLabel}`
       }))
     });
   }
@@ -1144,60 +1197,365 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
-    if (engine === "ace") {
-      // Use IBM Equal Access
-      const report = await runACEAnalysis(url, `url-${Date.now()}`, tags);
-      let formattedResults = formatACEResults(report);
-      
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
-        try {
-          const page = await browser.newPage();
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT });
-          await page.waitForTimeout(2000);
-          const keyboardResults = await runKeyboardTests(page);
-          formattedResults += formatKeyboardResults(keyboardResults);
-        } finally {
-          await browser.close();
-        }
-      }
-      
-      return {
-        content: [{ type: "text", text: formattedResults }],
-      };
+    const screenSizes = serverConfig.screenSizes;
+    
+    // Collect results from all screen sizes
+    interface AggregatedViolation {
+      id: string;
+      help: string;
+      impact: string;
+      description: string;
+      tags: string[];
+      helpUrl: string;
+      nodes: Map<string, { html: string; target: string[]; failureSummary?: string; screenSizes: Set<string> }>;
     }
+    
+    interface AggregatedIncomplete {
+      help: string;
+      nodeCount: number;
+      screenSizes: Set<string>;
+    }
+    
+    const aggregatedViolations = new Map<string, AggregatedViolation>();
+    const aggregatedIncomplete = new Map<string, AggregatedIncomplete>();
+    const aggregatedKeyboardTraps = new Map<string, { trap: any; screenSizes: Set<string> }>();
+    const aggregatedUnfocusable = new Map<string, { el: any; screenSizes: Set<string> }>();
+    const aggregatedDialogEscapes: Array<{ dialog: any; screenSize: string }> = [];
+    const aggregatedButtonActivations: Array<{ btn: any; screenSize: string }> = [];
+    
+    let totalPasses = 0;
+    let totalInapplicable = 0;
+    let firstTimestamp = '';
+    let totalFocusableElements = 0;
+    let totalTestedElements = 0;
 
-    // Use Axe-core with Playwright
     const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
     try {
-      const page = await browser.newPage();
-      await page.goto(url, { 
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-      
-      await page.waitForTimeout(3000);
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const results = await page.evaluate((runTags) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+      for (const screenSize of screenSizes) {
+        const screenSizeStr = formatScreenSize(screenSize);
+        const page = await browser.newPage({
+          viewport: { width: screenSize.width, height: screenSize.height }
         });
-      }, tags);
+        
+        await page.goto(url, { 
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT 
+        });
+        await page.waitForTimeout(3000);
 
-      let formattedResults = formatAxeResults(results as AxeResults);
+        if (engine === "ace") {
+          // For ACE, we need to get the page content and analyze it
+          const pageContent = await page.content();
+          const report = await runACEAnalysis(pageContent, `url-${Date.now()}-${screenSizeStr}`, tags);
+          
+          // Aggregate ACE violations
+          const violations = report.results.filter(r => r.level === "violation" || r.level === "potentialviolation");
+          for (const item of violations) {
+            const key = item.ruleId;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: item.ruleId,
+                help: item.message,
+                impact: item.level === "violation" ? "serious" : "moderate",
+                description: item.message,
+                tags: [`ibm-${item.category.toLowerCase().replace(/\s+/g, "-")}`],
+                helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            const nodeKey = item.path.dom;
+            if (!violation.nodes.has(nodeKey)) {
+              violation.nodes.set(nodeKey, {
+                html: item.snippet,
+                target: [item.path.dom],
+                failureSummary: item.message,
+                screenSizes: new Set()
+              });
+            }
+            violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+          }
+          
+          if (!firstTimestamp) firstTimestamp = new Date().toISOString();
+        } else {
+          // Use Axe-core
+          await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run keyboard tests if enabled
+          const axeOptions = buildAxeOptions(tags);
+          const results = await page.evaluate((options) => {
+            return new Promise((resolve) => {
+              // @ts-ignore - axe is injected globally
+              axe.run(options).then(resolve);
+            });
+          }, axeOptions) as any;
+
+          if (!firstTimestamp) firstTimestamp = results.timestamp;
+          totalPasses = Math.max(totalPasses, results.passes?.length || 0);
+          totalInapplicable = Math.max(totalInapplicable, results.inapplicable?.length || 0);
+          
+          // Aggregate violations
+          for (const violation of (results.violations || [])) {
+            const key = violation.id;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: violation.id,
+                help: violation.help,
+                impact: violation.impact,
+                description: violation.description,
+                tags: violation.tags,
+                helpUrl: violation.helpUrl,
+                nodes: new Map()
+              });
+            }
+            const aggViolation = aggregatedViolations.get(key)!;
+            for (const node of violation.nodes) {
+              const nodeKey = node.target.join(' ');
+              if (!aggViolation.nodes.has(nodeKey)) {
+                aggViolation.nodes.set(nodeKey, {
+                  html: node.html,
+                  target: node.target,
+                  failureSummary: node.failureSummary,
+                  screenSizes: new Set()
+                });
+              }
+              aggViolation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+            }
+          }
+          
+          // Aggregate incomplete
+          for (const item of (results.incomplete || [])) {
+            const key = item.id;
+            if (!aggregatedIncomplete.has(key)) {
+              aggregatedIncomplete.set(key, {
+                help: item.help,
+                nodeCount: item.nodes.length,
+                screenSizes: new Set()
+              });
+            }
+            aggregatedIncomplete.get(key)!.screenSizes.add(screenSizeStr);
+          }
+        }
+
+        // Run keyboard tests if enabled
+        if (serverConfig.runPlaywrightTests) {
+          const keyboardResults = await runKeyboardTests(page);
+          totalFocusableElements = Math.max(totalFocusableElements, keyboardResults.totalFocusableElements);
+          totalTestedElements = Math.max(totalTestedElements, keyboardResults.testedElements);
+          
+          // Aggregate keyboard traps
+          for (const trap of keyboardResults.keyboardTraps) {
+            const key = trap.selector;
+            if (!aggregatedKeyboardTraps.has(key)) {
+              aggregatedKeyboardTraps.set(key, { trap, screenSizes: new Set() });
+            }
+            aggregatedKeyboardTraps.get(key)!.screenSizes.add(screenSizeStr);
+          }
+          
+          // Aggregate unfocusable elements
+          for (const el of keyboardResults.unfocusableInteractive) {
+            const key = el.selector;
+            if (!aggregatedUnfocusable.has(key)) {
+              aggregatedUnfocusable.set(key, { el, screenSizes: new Set() });
+            }
+            aggregatedUnfocusable.get(key)!.screenSizes.add(screenSizeStr);
+          }
+          
+          // Collect dialog escapes and button activations (just from first screen size to avoid duplication)
+          if (screenSize === screenSizes[0]) {
+            for (const dialog of keyboardResults.dialogEscapes) {
+              aggregatedDialogEscapes.push({ dialog, screenSize: screenSizeStr });
+            }
+            for (const btn of keyboardResults.buttonActivations) {
+              aggregatedButtonActivations.push({ btn, screenSize: screenSizeStr });
+            }
+          }
+        }
+        
+        await page.close();
+      }
+
+      // Format aggregated results
+      const allScreenSizesStr = screenSizes.map(s => formatScreenSize(s)).join(', ');
+      let output = `# Accessibility Test Results (${engine === 'ace' ? 'IBM Equal Access' : 'Axe-core'})\n\n`;
+      output += `**URL**: ${url}\n`;
+      if (screenSizes.length > 1) {
+        output += `**Screen Sizes Tested**: ${allScreenSizesStr}\n`;
+      }
+      output += `**Timestamp**: ${firstTimestamp}\n\n`;
+      
+      output += `## Summary\n`;
+      if (engine !== 'ace') {
+        output += `- ✅ Passes: ${totalPasses}\n`;
+      }
+      output += `- ❌ Violations: ${aggregatedViolations.size}\n`;
+      if (aggregatedIncomplete.size > 0) {
+        output += `- ⚠️  Incomplete: ${aggregatedIncomplete.size}\n`;
+      }
+      if (engine !== 'ace') {
+        output += `- ℹ️  Inapplicable: ${totalInapplicable}\n`;
+      }
+      output += `\n`;
+
+      if (aggregatedViolations.size > 0) {
+        output += `## Violations\n\n`;
+        let violationIndex = 0;
+        for (const [_, violation] of aggregatedViolations) {
+          violationIndex++;
+          output += `### ${violationIndex}. ${violation.help}\n`;
+          output += `**Impact**: ${violation.impact}\n`;
+          output += `**Description**: ${violation.description}\n`;
+          const wcagTags = violation.tags.filter((tag: string) => tag.startsWith('wcag'));
+          if (wcagTags.length > 0) {
+            output += `**WCAG**: ${wcagTags.join(', ')}\n`;
+          }
+          output += `**Affected Elements**: ${violation.nodes.size}\n\n`;
+          
+          let nodeIndex = 0;
+          for (const [_, node] of violation.nodes) {
+            nodeIndex++;
+            const screenSizeNote = screenSizes.length > 1 
+              ? ` *(${Array.from(node.screenSizes).join(', ')})*`
+              : '';
+            output += `  ${nodeIndex}. \`${node.html}\`${screenSizeNote}\n`;
+            output += `     Target: ${node.target.join(' ')}\n`;
+            if (node.failureSummary) {
+              output += `     ${node.failureSummary}\n`;
+            }
+            output += `\n`;
+          }
+          output += `**How to fix**: ${violation.helpUrl}\n\n`;
+        }
+      }
+
+      if (aggregatedIncomplete.size > 0) {
+        output += `## Incomplete Checks (Need Manual Review)\n\n`;
+        let incompleteIndex = 0;
+        for (const [_, item] of aggregatedIncomplete) {
+          incompleteIndex++;
+          const screenSizeNote = screenSizes.length > 1 
+            ? ` *(${Array.from(item.screenSizes).join(', ')})*`
+            : '';
+          output += `${incompleteIndex}. **${item.help}** (${item.nodeCount} elements)${screenSizeNote}\n`;
+        }
+        output += `\n`;
+      }
+
+      // Add keyboard test results if enabled
       if (serverConfig.runPlaywrightTests) {
-        const keyboardResults = await runKeyboardTests(page);
-        formattedResults += formatKeyboardResults(keyboardResults);
+        output += `\n---\n\n# Keyboard Accessibility Test Results (Playwright)\n\n`;
+        output += `**Total Focusable Elements**: ${totalFocusableElements}\n`;
+        output += `**Elements Tested via Tab**: ${totalTestedElements}\n`;
+        if (aggregatedButtonActivations.length > 0) {
+          output += `**Buttons Activated**: ${aggregatedButtonActivations.length}\n`;
+        }
+        if (aggregatedDialogEscapes.length > 0) {
+          output += `**Dialogs Encountered**: ${aggregatedDialogEscapes.length}\n`;
+        }
+        output += `\n`;
+
+        // Button activations
+        if (aggregatedButtonActivations.length > 0) {
+          const dialogTriggers = aggregatedButtonActivations.filter(b => b.btn.triggeredDialog);
+          const expandables = aggregatedButtonActivations.filter(b => b.btn.expandedContent && !b.btn.triggeredDialog);
+          const otherButtons = aggregatedButtonActivations.filter(b => !b.btn.triggeredDialog && !b.btn.expandedContent);
+
+          output += `## 🔘 Button Activation Results\n\n`;
+          
+          if (dialogTriggers.length > 0) {
+            output += `### Buttons That Opened Dialogs (${dialogTriggers.length})\n`;
+            dialogTriggers.slice(0, 10).forEach((item, i) => {
+              output += `${i + 1}. \`${item.btn.selector}\`\n`;
+            });
+            if (dialogTriggers.length > 10) output += `*... and ${dialogTriggers.length - 10} more*\n`;
+            output += `\n`;
+          }
+
+          if (expandables.length > 0) {
+            output += `### Expandable Controls (Accordions/Toggles) (${expandables.length})\n`;
+            expandables.slice(0, 10).forEach((item, i) => {
+              output += `${i + 1}. \`${item.btn.selector}\`\n`;
+            });
+            if (expandables.length > 10) output += `*... and ${expandables.length - 10} more*\n`;
+            output += `\n`;
+          }
+
+          if (otherButtons.length > 0) {
+            output += `### Other Buttons Activated (${otherButtons.length})\n`;
+            otherButtons.slice(0, 10).forEach((item, i) => {
+              output += `${i + 1}. \`${item.btn.selector}\`\n`;
+            });
+            if (otherButtons.length > 10) output += `*... and ${otherButtons.length - 10} more*\n`;
+            output += `\n`;
+          }
+        }
+
+        // Dialog escapes
+        if (aggregatedDialogEscapes.length > 0) {
+          const successfulEscapes = aggregatedDialogEscapes.filter(d => d.dialog.escapedSuccessfully);
+          const failedEscapes = aggregatedDialogEscapes.filter(d => !d.dialog.escapedSuccessfully);
+          
+          if (successfulEscapes.length > 0) {
+            output += `## ℹ️ Dialogs Closed During Testing (${successfulEscapes.length})\n\n`;
+            output += `*These dialogs were detected and closed with Escape key to continue testing*\n\n`;
+            successfulEscapes.forEach((item, i) => {
+              output += `${i + 1}. \`${item.dialog.dialogSelector}\` - ${item.dialog.note}\n`;
+            });
+            output += `\n`;
+          }
+          
+          if (failedEscapes.length > 0) {
+            output += `## ⚠️ Dialogs That Could Not Be Closed (${failedEscapes.length})\n\n`;
+            output += `*WCAG 2.1.2 No Keyboard Trap - Level A*\n\n`;
+            failedEscapes.forEach((item, i) => {
+              output += `### ${i + 1}. ${item.dialog.dialogSelector}\n`;
+              output += `**Note**: ${item.dialog.note}\n`;
+              output += `**HTML**: \`${item.dialog.dialogHtml}\`\n`;
+              output += `**Recommendation**: Dialogs should be dismissible via Escape key for keyboard accessibility.\n\n`;
+            });
+          }
+        }
+
+        // Keyboard traps
+        if (aggregatedKeyboardTraps.size > 0) {
+          output += `## ❌ Keyboard Traps Found (${aggregatedKeyboardTraps.size})\n\n`;
+          output += `*WCAG 2.1.2 No Keyboard Trap - Level A*\n\n`;
+          let trapIndex = 0;
+          for (const [_, item] of aggregatedKeyboardTraps) {
+            trapIndex++;
+            const screenSizeNote = screenSizes.length > 1 
+              ? ` *(${Array.from(item.screenSizes).join(', ')})*`
+              : '';
+            output += `### ${trapIndex}. ${item.trap.selector}${screenSizeNote}\n`;
+            output += `**Issue**: ${item.trap.issue}\n`;
+            output += `**HTML**: \`${item.trap.html}\`\n`;
+            output += `**How to fix**: Ensure users can navigate away from this element using only the keyboard.\n\n`;
+          }
+        } else {
+          output += `## ✅ No Keyboard Traps Detected\n\n`;
+        }
+
+        // Unfocusable interactive elements
+        if (aggregatedUnfocusable.size > 0) {
+          output += `## ⚠️ Interactive Elements Not Keyboard Accessible (${aggregatedUnfocusable.size})\n\n`;
+          output += `*WCAG 2.1.1 Keyboard - Level A*\n\n`;
+          let unfocusIndex = 0;
+          for (const [_, item] of aggregatedUnfocusable) {
+            unfocusIndex++;
+            const screenSizeNote = screenSizes.length > 1 
+              ? ` *(${Array.from(item.screenSizes).join(', ')})*`
+              : '';
+            output += `### ${unfocusIndex}. ${item.el.selector}${screenSizeNote}\n`;
+            output += `**Role**: ${item.el.role || 'none'}\n`;
+            output += `**HTML**: \`${item.el.html}\`\n`;
+            output += `**How to fix**: Add \`tabindex="0"\` or use a native interactive element.\n\n`;
+          }
+        } else {
+          output += `## ✅ All Interactive Elements Are Keyboard Accessible\n\n`;
+        }
       }
 
       return {
-        content: [{ type: "text", text: formattedResults }],
+        content: [{ type: "text", text: output }],
       };
     } finally {
       await browser.close();
@@ -1212,63 +1570,196 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
-    if (engine === "ace") {
-      const report = await runACEAnalysis(url, `url-json-${Date.now()}`, tags);
-      let violations = aceToAxeViolationsFormat(report);
-      
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
-        try {
-          const page = await browser.newPage();
-          await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT });
-          await page.waitForTimeout(2000);
-          const keyboardResults = await runKeyboardTests(page);
-          const keyboardViolations = keyboardToAxeViolationsFormat(keyboardResults);
-          violations = [...violations, ...keyboardViolations];
-        } finally {
-          await browser.close();
-        }
-      }
-      
-      return {
-        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
-      };
+    const screenSizes = serverConfig.screenSizes;
+    
+    // Aggregate violations with screen size info
+    interface AggregatedJsonViolation {
+      id: string;
+      impact: string;
+      tags: string[];
+      description: string;
+      help: string;
+      helpUrl: string;
+      screenSizes: Set<string>;
+      nodes: Map<string, { html: string; target: string[]; failureSummary?: string; screenSizes: Set<string> }>;
     }
+    
+    const aggregatedViolations = new Map<string, AggregatedJsonViolation>();
 
-    // Use Axe-core with Playwright
     const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
     try {
-      const page = await browser.newPage();
-      await page.goto(url, { 
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-      
-      await page.waitForTimeout(3000);
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const axeOptions = buildAxeOptions(tags);
-      const results = await page.evaluate((options) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(options).then(resolve);
+      for (const screenSize of screenSizes) {
+        const screenSizeStr = formatScreenSize(screenSize);
+        const page = await browser.newPage({
+          viewport: { width: screenSize.width, height: screenSize.height }
         });
-      }, axeOptions);
+        
+        await page.goto(url, { 
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT 
+        });
+        await page.waitForTimeout(3000);
 
-      const axeResults = results as AxeResults;
-      let violations = axeResults.violations;
+        if (engine === "ace") {
+          const pageContent = await page.content();
+          const report = await runACEAnalysis(pageContent, `url-json-${Date.now()}-${screenSizeStr}`, tags);
+          const violations = report.results.filter(r => r.level === "violation" || r.level === "potentialviolation");
+          
+          for (const item of violations) {
+            const key = item.ruleId;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: item.ruleId,
+                impact: item.level === "violation" ? "serious" : "moderate",
+                tags: [`ibm-${item.category.toLowerCase().replace(/\s+/g, "-")}`],
+                description: item.message,
+                help: item.message,
+                helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+                screenSizes: new Set(),
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            violation.screenSizes.add(screenSizeStr);
+            const nodeKey = item.path.dom;
+            if (!violation.nodes.has(nodeKey)) {
+              violation.nodes.set(nodeKey, {
+                html: item.snippet,
+                target: [item.path.dom],
+                failureSummary: item.message,
+                screenSizes: new Set()
+              });
+            }
+            violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+          }
+          
+          // Run keyboard tests if enabled
+          if (serverConfig.runPlaywrightTests) {
+            const keyboardResults = await runKeyboardTests(page);
+            // Aggregate keyboard violations
+            for (const trap of keyboardResults.keyboardTraps) {
+              const key = 'keyboard-trap';
+              if (!aggregatedViolations.has(key)) {
+                aggregatedViolations.set(key, {
+                  id: 'keyboard-trap',
+                  impact: 'critical',
+                  tags: ['wcag2a', 'wcag212', 'keyboard'],
+                  description: 'Ensure keyboard focus is not trapped on an element',
+                  help: 'Focus must not be trapped in any component',
+                  helpUrl: 'https://www.w3.org/WAI/WCAG21/Understanding/no-keyboard-trap.html',
+                  screenSizes: new Set(),
+                  nodes: new Map()
+                });
+              }
+              const violation = aggregatedViolations.get(key)!;
+              violation.screenSizes.add(screenSizeStr);
+              if (!violation.nodes.has(trap.selector)) {
+                violation.nodes.set(trap.selector, {
+                  html: trap.html,
+                  target: [trap.selector],
+                  failureSummary: trap.issue,
+                  screenSizes: new Set()
+                });
+              }
+              violation.nodes.get(trap.selector)!.screenSizes.add(screenSizeStr);
+            }
+          }
+        } else {
+          await page.addScriptTag({ path: AXE_CORE_PATH });
 
-      // Run keyboard tests if enabled
-      if (serverConfig.runPlaywrightTests) {
-        const keyboardResults = await runKeyboardTests(page);
-        const keyboardViolations = keyboardToAxeViolationsFormat(keyboardResults);
-        violations = [...violations, ...keyboardViolations];
+          const axeOptions = buildAxeOptions(tags);
+          const results = await page.evaluate((options) => {
+            return new Promise((resolve) => {
+              // @ts-ignore - axe is injected globally
+              axe.run(options).then(resolve);
+            });
+          }, axeOptions) as any;
+
+          for (const v of (results.violations || [])) {
+            const key = v.id;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: v.id,
+                impact: v.impact,
+                tags: v.tags,
+                description: v.description,
+                help: v.help,
+                helpUrl: v.helpUrl,
+                screenSizes: new Set(),
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            violation.screenSizes.add(screenSizeStr);
+            for (const n of v.nodes) {
+              const nodeKey = n.target.join(' ');
+              if (!violation.nodes.has(nodeKey)) {
+                violation.nodes.set(nodeKey, {
+                  html: n.html,
+                  target: n.target,
+                  failureSummary: n.failureSummary,
+                  screenSizes: new Set()
+                });
+              }
+              violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+            }
+          }
+
+          // Run keyboard tests if enabled
+          if (serverConfig.runPlaywrightTests) {
+            const keyboardResults = await runKeyboardTests(page);
+            for (const trap of keyboardResults.keyboardTraps) {
+              const key = 'keyboard-trap';
+              if (!aggregatedViolations.has(key)) {
+                aggregatedViolations.set(key, {
+                  id: 'keyboard-trap',
+                  impact: 'critical',
+                  tags: ['wcag2a', 'wcag212', 'keyboard'],
+                  description: 'Ensure keyboard focus is not trapped on an element',
+                  help: 'Focus must not be trapped in any component',
+                  helpUrl: 'https://www.w3.org/WAI/WCAG21/Understanding/no-keyboard-trap.html',
+                  screenSizes: new Set(),
+                  nodes: new Map()
+                });
+              }
+              const violation = aggregatedViolations.get(key)!;
+              violation.screenSizes.add(screenSizeStr);
+              if (!violation.nodes.has(trap.selector)) {
+                violation.nodes.set(trap.selector, {
+                  html: trap.html,
+                  target: [trap.selector],
+                  failureSummary: trap.issue,
+                  screenSizes: new Set()
+                });
+              }
+              violation.nodes.get(trap.selector)!.screenSizes.add(screenSizeStr);
+            }
+          }
+        }
+        
+        await page.close();
       }
 
+      // Convert aggregated results to JSON format
+      const allScreenSizesStr = screenSizes.map(s => formatScreenSize(s));
+      const jsonViolations = Array.from(aggregatedViolations.values()).map(v => ({
+        id: v.id,
+        impact: v.impact,
+        tags: v.tags,
+        description: v.description,
+        help: v.help,
+        helpUrl: v.helpUrl,
+        screenSizes: Array.from(v.screenSizes),
+        nodes: Array.from(v.nodes.values()).map(n => ({
+          html: n.html,
+          target: n.target,
+          failureSummary: n.failureSummary,
+          screenSizes: Array.from(n.screenSizes)
+        }))
+      }));
+
       return {
-        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(jsonViolations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -1283,36 +1774,192 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("HTML content is required");
     }
 
-    if (engine === "ace") {
-      const report = await runACEAnalysis(html, `html-${Date.now()}`, tags);
-      const formattedResults = formatACEResults(report);
-      return {
-        content: [{ type: "text", text: formattedResults }],
-      };
+    const screenSizes = serverConfig.screenSizes;
+    
+    // Aggregate violations across screen sizes
+    interface AggregatedViolation {
+      id: string;
+      help: string;
+      impact: string;
+      description: string;
+      tags: string[];
+      helpUrl: string;
+      nodes: Map<string, { html: string; target: string[]; failureSummary?: string; screenSizes: Set<string> }>;
     }
+    
+    const aggregatedViolations = new Map<string, AggregatedViolation>();
+    const aggregatedIncomplete = new Map<string, { help: string; nodeCount: number; screenSizes: Set<string> }>();
+    let totalPasses = 0;
+    let totalInapplicable = 0;
+    let firstTimestamp = '';
 
     const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
     try {
-      const page = await browser.newPage();
-      await page.setContent(html, { 
-        waitUntil: "networkidle",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const axeOptions = buildAxeOptions(tags);
-      const results = await page.evaluate((options) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(options).then(resolve);
+      for (const screenSize of screenSizes) {
+        const screenSizeStr = formatScreenSize(screenSize);
+        const page = await browser.newPage({
+          viewport: { width: screenSize.width, height: screenSize.height }
         });
-      }, axeOptions);
+        
+        await page.setContent(html, { 
+          waitUntil: "networkidle",
+          timeout: NAVIGATION_TIMEOUT 
+        });
 
-      const formattedResults = formatAxeResults(results as AxeResults);
+        if (engine === "ace") {
+          const report = await runACEAnalysis(html, `html-${Date.now()}-${screenSizeStr}`, tags);
+          const violations = report.results.filter(r => r.level === "violation" || r.level === "potentialviolation");
+          
+          for (const item of violations) {
+            const key = item.ruleId;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: item.ruleId,
+                help: item.message,
+                impact: item.level === "violation" ? "serious" : "moderate",
+                description: item.message,
+                tags: [`ibm-${item.category.toLowerCase().replace(/\s+/g, "-")}`],
+                helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            const nodeKey = item.path.dom;
+            if (!violation.nodes.has(nodeKey)) {
+              violation.nodes.set(nodeKey, {
+                html: item.snippet,
+                target: [item.path.dom],
+                failureSummary: item.message,
+                screenSizes: new Set()
+              });
+            }
+            violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+          }
+          
+          if (!firstTimestamp) firstTimestamp = new Date().toISOString();
+        } else {
+          await page.addScriptTag({ path: AXE_CORE_PATH });
+
+          const axeOptions = buildAxeOptions(tags);
+          const results = await page.evaluate((options) => {
+            return new Promise((resolve) => {
+              // @ts-ignore - axe is injected globally
+              axe.run(options).then(resolve);
+            });
+          }, axeOptions) as any;
+
+          if (!firstTimestamp) firstTimestamp = results.timestamp || new Date().toISOString();
+          totalPasses = Math.max(totalPasses, results.passes?.length || 0);
+          totalInapplicable = Math.max(totalInapplicable, results.inapplicable?.length || 0);
+          
+          for (const violation of (results.violations || [])) {
+            const key = violation.id;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: violation.id,
+                help: violation.help,
+                impact: violation.impact,
+                description: violation.description,
+                tags: violation.tags,
+                helpUrl: violation.helpUrl,
+                nodes: new Map()
+              });
+            }
+            const aggViolation = aggregatedViolations.get(key)!;
+            for (const node of violation.nodes) {
+              const nodeKey = node.target.join(' ');
+              if (!aggViolation.nodes.has(nodeKey)) {
+                aggViolation.nodes.set(nodeKey, {
+                  html: node.html,
+                  target: node.target,
+                  failureSummary: node.failureSummary,
+                  screenSizes: new Set()
+                });
+              }
+              aggViolation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+            }
+          }
+          
+          for (const item of (results.incomplete || [])) {
+            const key = item.id;
+            if (!aggregatedIncomplete.has(key)) {
+              aggregatedIncomplete.set(key, { help: item.help, nodeCount: item.nodes.length, screenSizes: new Set() });
+            }
+            aggregatedIncomplete.get(key)!.screenSizes.add(screenSizeStr);
+          }
+        }
+        
+        await page.close();
+      }
+
+      // Format aggregated results
+      const allScreenSizesStr = screenSizes.map(s => formatScreenSize(s)).join(', ');
+      let output = `# Accessibility Test Results (${engine === 'ace' ? 'IBM Equal Access' : 'Axe-core'})\n\n`;
+      output += `**Content**: HTML snippet\n`;
+      if (screenSizes.length > 1) {
+        output += `**Screen Sizes Tested**: ${allScreenSizesStr}\n`;
+      }
+      output += `**Timestamp**: ${firstTimestamp}\n\n`;
+      
+      output += `## Summary\n`;
+      if (engine !== 'ace') {
+        output += `- ✅ Passes: ${totalPasses}\n`;
+      }
+      output += `- ❌ Violations: ${aggregatedViolations.size}\n`;
+      if (aggregatedIncomplete.size > 0) {
+        output += `- ⚠️  Incomplete: ${aggregatedIncomplete.size}\n`;
+      }
+      if (engine !== 'ace') {
+        output += `- ℹ️  Inapplicable: ${totalInapplicable}\n`;
+      }
+      output += `\n`;
+
+      if (aggregatedViolations.size > 0) {
+        output += `## Violations\n\n`;
+        let violationIndex = 0;
+        for (const [_, violation] of aggregatedViolations) {
+          violationIndex++;
+          output += `### ${violationIndex}. ${violation.help}\n`;
+          output += `**Impact**: ${violation.impact}\n`;
+          output += `**Description**: ${violation.description}\n`;
+          const wcagTags = violation.tags.filter((tag: string) => tag.startsWith('wcag'));
+          if (wcagTags.length > 0) {
+            output += `**WCAG**: ${wcagTags.join(', ')}\n`;
+          }
+          output += `**Affected Elements**: ${violation.nodes.size}\n\n`;
+          
+          let nodeIndex = 0;
+          for (const [_, node] of violation.nodes) {
+            nodeIndex++;
+            const screenSizeNote = screenSizes.length > 1 
+              ? ` *(${Array.from(node.screenSizes).join(', ')})*`
+              : '';
+            output += `  ${nodeIndex}. \`${node.html}\`${screenSizeNote}\n`;
+            output += `     Target: ${node.target.join(' ')}\n`;
+            if (node.failureSummary) {
+              output += `     ${node.failureSummary}\n`;
+            }
+            output += `\n`;
+          }
+          output += `**How to fix**: ${violation.helpUrl}\n\n`;
+        }
+      }
+
+      if (aggregatedIncomplete.size > 0) {
+        output += `## Incomplete Checks (Need Manual Review)\n\n`;
+        let incompleteIndex = 0;
+        for (const [_, item] of aggregatedIncomplete) {
+          incompleteIndex++;
+          const screenSizeNote = screenSizes.length > 1 
+            ? ` *(${Array.from(item.screenSizes).join(', ')})*`
+            : '';
+          output += `${incompleteIndex}. **${item.help}** (${item.nodeCount} elements)${screenSizeNote}\n`;
+        }
+        output += `\n`;
+      }
 
       return {
-        content: [{ type: "text", text: formattedResults }],
+        content: [{ type: "text", text: output }],
       };
     } finally {
       await browser.close();
@@ -1327,36 +1974,129 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("HTML content is required");
     }
 
-    if (engine === "ace") {
-      const report = await runACEAnalysis(html, `html-json-${Date.now()}`, tags);
-      const violations = aceToAxeViolationsFormat(report);
-      return {
-        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
-      };
+    const screenSizes = serverConfig.screenSizes;
+    
+    interface AggregatedJsonViolation {
+      id: string;
+      impact: string;
+      tags: string[];
+      description: string;
+      help: string;
+      helpUrl: string;
+      screenSizes: Set<string>;
+      nodes: Map<string, { html: string; target: string[]; failureSummary?: string; screenSizes: Set<string> }>;
     }
+    
+    const aggregatedViolations = new Map<string, AggregatedJsonViolation>();
 
     const browser = await chromium.launch({ headless: serverConfig.playwrightHeadless });
     try {
-      const page = await browser.newPage();
-      await page.setContent(html, { 
-        waitUntil: "networkidle",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const axeOptions = buildAxeOptions(tags);
-      const results = await page.evaluate((options) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(options).then(resolve);
+      for (const screenSize of screenSizes) {
+        const screenSizeStr = formatScreenSize(screenSize);
+        const page = await browser.newPage({
+          viewport: { width: screenSize.width, height: screenSize.height }
         });
-      }, axeOptions);
+        
+        await page.setContent(html, { 
+          waitUntil: "networkidle",
+          timeout: NAVIGATION_TIMEOUT 
+        });
 
-      const axeResults = results as AxeResults;
+        if (engine === "ace") {
+          const report = await runACEAnalysis(html, `html-json-${Date.now()}-${screenSizeStr}`, tags);
+          const violations = report.results.filter(r => r.level === "violation" || r.level === "potentialviolation");
+          
+          for (const item of violations) {
+            const key = item.ruleId;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: item.ruleId,
+                impact: item.level === "violation" ? "serious" : "moderate",
+                tags: [`ibm-${item.category.toLowerCase().replace(/\s+/g, "-")}`],
+                description: item.message,
+                help: item.message,
+                helpUrl: `https://able.ibm.com/rules/rule/${item.ruleId}`,
+                screenSizes: new Set(),
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            violation.screenSizes.add(screenSizeStr);
+            const nodeKey = item.path.dom;
+            if (!violation.nodes.has(nodeKey)) {
+              violation.nodes.set(nodeKey, {
+                html: item.snippet,
+                target: [item.path.dom],
+                failureSummary: item.message,
+                screenSizes: new Set()
+              });
+            }
+            violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+          }
+        } else {
+          await page.addScriptTag({ path: AXE_CORE_PATH });
+
+          const axeOptions = buildAxeOptions(tags);
+          const results = await page.evaluate((options) => {
+            return new Promise((resolve) => {
+              // @ts-ignore - axe is injected globally
+              axe.run(options).then(resolve);
+            });
+          }, axeOptions) as any;
+
+          for (const v of (results.violations || [])) {
+            const key = v.id;
+            if (!aggregatedViolations.has(key)) {
+              aggregatedViolations.set(key, {
+                id: v.id,
+                impact: v.impact,
+                tags: v.tags,
+                description: v.description,
+                help: v.help,
+                helpUrl: v.helpUrl,
+                screenSizes: new Set(),
+                nodes: new Map()
+              });
+            }
+            const violation = aggregatedViolations.get(key)!;
+            violation.screenSizes.add(screenSizeStr);
+            for (const n of v.nodes) {
+              const nodeKey = n.target.join(' ');
+              if (!violation.nodes.has(nodeKey)) {
+                violation.nodes.set(nodeKey, {
+                  html: n.html,
+                  target: n.target,
+                  failureSummary: n.failureSummary,
+                  screenSizes: new Set()
+                });
+              }
+              violation.nodes.get(nodeKey)!.screenSizes.add(screenSizeStr);
+            }
+          }
+        }
+        
+        await page.close();
+      }
+
+      // Convert to JSON format
+      const jsonViolations = Array.from(aggregatedViolations.values()).map(v => ({
+        id: v.id,
+        impact: v.impact,
+        tags: v.tags,
+        description: v.description,
+        help: v.help,
+        helpUrl: v.helpUrl,
+        screenSizes: Array.from(v.screenSizes),
+        nodes: Array.from(v.nodes.values()).map(n => ({
+          html: n.html,
+          target: n.target,
+          failureSummary: n.failureSummary,
+          screenSizes: Array.from(n.screenSizes)
+        }))
+      }));
 
       return {
-        content: [{ type: "text", text: JSON.stringify(axeResults.violations, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(jsonViolations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -1718,7 +2458,8 @@ async function main() {
   await server.connect(transport);
   
   const playwrightStatus = serverConfig.runPlaywrightTests ? "Keyboard Tests: ON" : "Keyboard Tests: OFF";
-  console.error(`Accessibility Testing MCP Server v3.0.0 (Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}, ${playwrightStatus})`);
+  const screenSizesStr = serverConfig.screenSizes.map(formatScreenSize).join(", ");
+  console.error(`Accessibility Testing MCP Server v3.0.0 (Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}, ${playwrightStatus}, Screen Sizes: ${screenSizesStr})`);
 }
 
 main().catch((error) => {
