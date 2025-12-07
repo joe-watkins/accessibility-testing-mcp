@@ -1,6 +1,6 @@
 # Accessibility Testing MCP
 
-An MCP server for accessibility testing using **axe-core**, **IBM Equal Access**, and **Playwright**. Choose your testing engine and enable automated keyboard accessibility testing for comprehensive coverage.
+An MCP server for accessibility testing using **axe-core**, **IBM Equal Access**, and **Playwright**. Choose your testing engine for comprehensive accessibility coverage.
 
 ## Features
 
@@ -8,12 +8,6 @@ An MCP server for accessibility testing using **axe-core**, **IBM Equal Access**
 
 - **Axe-core** (Deque) - Industry standard, zero false positives
 - **IBM Equal Access** - Comprehensive IBM accessibility requirements
-
-### Automated Keyboard Testing (v3.0+)
-
-- **Keyboard trap detection** - Identifies elements that trap keyboard focus
-- **Focus order verification** - Tracks tab order through the page
-- **Interactive element checks** - Finds clickable elements that aren't keyboard accessible
 
 ### Tools
 
@@ -54,7 +48,6 @@ Configure via MCP config `env` section:
 | `WCAG_LEVEL` | `2.0_A`, `2.0_AA`, `2.1_A`, `2.1_AA`, `2.2_AA`, etc. | `2.1_AA` | WCAG version & level |
 | `BEST_PRACTICES` | `true`, `false` | `true` | Include best practices/recommendations |
 | `RUN_EXPERIMENTAL` | `true`, `false` | `false` | Experimental rules (axe only) |
-| `RUN_PLAYWRIGHT_TESTS` | `true`, `false` | `false` | Run automated keyboard accessibility tests |
 | `PLAYWRIGHT_HEADLESS` | `true`, `false` | `true` | Run browser in headless mode |
 
 ### VS Code (GitHub Copilot)
@@ -73,7 +66,6 @@ Add to VS Code settings (JSON):
         "WCAG_LEVEL": "2.2_AA",         // WCAG version & level (default: "2.1_AA")
         "BEST_PRACTICES": "true",       // Include best practices (default: "true")
         "RUN_EXPERIMENTAL": "false",    // Experimental rules, axe only (default: "false")
-        "RUN_PLAYWRIGHT_TESTS": "true", // Enable keyboard testing (default: "false")
         "PLAYWRIGHT_HEADLESS": "true"   // Run headless (default: "true")
       }
     }
@@ -93,8 +85,7 @@ Example with IBM Equal Access:
       "env": {
         "A11Y_ENGINE": "ace",           // "axe" or "ace" (default: "axe")
         "WCAG_LEVEL": "2.2_AA",         // WCAG version & level (default: "2.1_AA")
-        "BEST_PRACTICES": "true",       // Include best practices (default: "true")
-        "RUN_PLAYWRIGHT_TESTS": "true"  // Enable keyboard testing (default: "false")
+        "BEST_PRACTICES": "true"        // Include best practices (default: "true")
       }
     }
   }
@@ -113,41 +104,12 @@ Add to `claude_desktop_config.json`:
       "args": ["/path/to/accessibility-testing-mcp/build/index.js"],
       "env": {
         "A11Y_ENGINE": "ace",
-        "WCAG_LEVEL": "2.2_AA",
-        "RUN_PLAYWRIGHT_TESTS": "true"
+        "WCAG_LEVEL": "2.2_AA"
       }
     }
   }
 }
 ```
-
-## Keyboard Accessibility Testing
-
-When `RUN_PLAYWRIGHT_TESTS` is enabled, the `analyze_url` and `analyze_url_json` tools will automatically perform keyboard accessibility tests in addition to standard accessibility scans.
-
-### What It Tests
-
-1. **Keyboard Traps (WCAG 2.1.2 - Level A)**
-   - Detects elements where focus becomes trapped
-   - Identifies when users cannot Tab away from an element
-
-2. **Unfocusable Interactive Elements (WCAG 2.1.1 - Level A)**
-   - Finds elements with `onclick`, `role="button"`, `role="link"`, etc.
-   - Identifies interactive elements missing `tabindex` or proper semantic markup
-
-3. **Focus Order**
-   - Tracks the sequence of focusable elements
-   - Helps verify logical tab order
-
-### Output Format
-
-Keyboard test results are appended to standard accessibility results:
-- **Markdown format** (`analyze_url`): Human-readable report with WCAG references
-- **JSON format** (`analyze_url_json`): Violations in axe-core compatible format
-
-### Debugging with Visible Browser
-
-Set `PLAYWRIGHT_HEADLESS=false` to watch the keyboard tests run in a visible browser window. This is useful for debugging or manual verification.
 
 ## Choosing an Engine
 
@@ -203,12 +165,6 @@ Version 3.0 introduces several changes:
 
 2. **New Dependencies**: Run `npm install` after updating to download Playwright and its Chromium browser (~300MB).
 
-### New Features
-
-1. **Keyboard Accessibility Testing**: Enable with `RUN_PLAYWRIGHT_TESTS=true` to automatically test for keyboard traps and unfocusable interactive elements.
-
-2. **Headless Mode Control**: Use `PLAYWRIGHT_HEADLESS=false` to watch tests run in a visible browser window.
-
 ### Migration Steps
 
 ```bash
@@ -222,7 +178,7 @@ npm install
 npm run build
 ```
 
-No configuration changes are required unless you want to enable the new keyboard testing features.
+No configuration changes are required.
 
 ## License
 
