@@ -61,6 +61,7 @@ interface ServerConfig {
   includeBestPractices: boolean;
   screenSizes: ScreenSize[];
   aceReportLevels: string[];
+  headless: boolean;
 }
 
 // Parse WCAG_LEVEL env var with flexible input formats
@@ -121,6 +122,7 @@ function loadConfig(): ServerConfig {
   const wcagLevel = parseWcagLevel(process.env.WCAG_LEVEL);
   const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
   const screenSizes = parseScreenSizes(process.env.SCREEN_SIZES);
+  const headless = process.env.HEADLESS_BROWSER !== "false"; // Default: true (headless mode)
   
   // Build ACE report levels based on BEST_PRACTICES (recommendations = best practices for ACE)
   const aceReportLevels = includeBestPractices 
@@ -133,6 +135,7 @@ function loadConfig(): ServerConfig {
     includeBestPractices,
     screenSizes,
     aceReportLevels,
+    headless,
   };
 }
 
@@ -552,7 +555,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     // Use Axe-core - test each screen size
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: serverConfig.headless });
     try {
       for (const screenSize of serverConfig.screenSizes) {
         const page = await browser.newPage();
@@ -610,7 +613,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: serverConfig.headless });
     try {
       for (const screenSize of serverConfig.screenSizes) {
         const page = await browser.newPage();
@@ -664,7 +667,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: serverConfig.headless });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
@@ -708,7 +711,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: serverConfig.headless });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { 
@@ -765,7 +768,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
 
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: serverConfig.headless });
     try {
       const page = await browser.newPage();
       await page.setContent("<html><body></body></html>");

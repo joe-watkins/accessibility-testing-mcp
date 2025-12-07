@@ -50,6 +50,7 @@ Configure via MCP config `env` section:
 | `WCAG_LEVEL` | `2.0_A`, `2.0_AA`, `2.1_A`, `2.1_AA`, `2.2_AA`, etc. | `2.1_AA` | WCAG version & level |
 | `BEST_PRACTICES` | `true`, `false` | `true` | Include best practices/recommendations |
 | `SCREEN_SIZES` | Comma-separated `WIDTHxHEIGHT` | `1280x1024` | Viewport sizes to test |
+| `HEADLESS_BROWSER` | `true`, `false` | `true` | Run browser in headless mode; set to `false` to open visible browser |
 
 The `WCAG_LEVEL` setting automatically configures both Axe-core tags and IBM Equal Access policies.
 
@@ -68,7 +69,8 @@ Add to VS Code settings (JSON):
         "A11Y_ENGINE": "axe",
         "WCAG_LEVEL": "2.2_AA",
         "BEST_PRACTICES": "true",
-        "SCREEN_SIZES": "1280x1024,320x640"
+        "SCREEN_SIZES": "1280x1024,320x640",
+        "HEADLESS_BROWSER": "true"
       }
     }
   }
