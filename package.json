@@ -1,6 +1,6 @@
 {
   "name": "accessibility-testing-mcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "MCP server for accessibility testing using axe-core and IBM Equal Access",
   "type": "module",
   "main": "build/index.js",

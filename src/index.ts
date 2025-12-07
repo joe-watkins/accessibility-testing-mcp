@@ -26,53 +26,127 @@ const NAVIGATION_TIMEOUT = 90000; // 90 seconds for complex sites
 // Engine types
 type Engine = "axe" | "ace";
 
+// Normalized WCAG levels that work for both engines
+type WcagLevel = "2.0_A" | "2.0_AA" | "2.0_AAA" | "2.1_A" | "2.1_AA" | "2.1_AAA" | "2.2_A" | "2.2_AA" | "2.2_AAA";
+
+// Screen size type
+interface ScreenSize {
+  width: number;
+  height: number;
+  label: string;
+}
+
+// Mapping from normalized WCAG level to engine-specific values
+const WCAG_LEVEL_MAP: Record<WcagLevel, { axeTags: string[]; acePolicy: string }> = {
+  "2.0_A":   { axeTags: ["wcag2a"],   acePolicy: "WCAG_2_0" },
+  "2.0_AA":  { axeTags: ["wcag2a", "wcag2aa"],  acePolicy: "WCAG_2_0" },
+  "2.0_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa"], acePolicy: "WCAG_2_0" },
+  "2.1_A":   { axeTags: ["wcag2a", "wcag21a"],  acePolicy: "WCAG_2_1" },
+  "2.1_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"], acePolicy: "WCAG_2_1" },
+  "2.1_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa"], acePolicy: "WCAG_2_1" },
+  "2.2_A":   { axeTags: ["wcag2a", "wcag21a", "wcag22a"], acePolicy: "WCAG_2_2" },
+  "2.2_AA":  { axeTags: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"], acePolicy: "WCAG_2_2" },
+  "2.2_AAA": { axeTags: ["wcag2a", "wcag2aa", "wcag2aaa", "wcag21a", "wcag21aa", "wcag21aaa", "wcag22a", "wcag22aa", "wcag22aaa"], acePolicy: "WCAG_2_2" },
+};
+
 // Environment-based configuration with defaults
 const DEFAULT_ENGINE: Engine = "axe";
-const DEFAULT_WCAG_VERSION = "wcag2aa";
-const DEFAULT_RUN_EXPERIMENTAL = false;
+const DEFAULT_WCAG_LEVEL: WcagLevel = "2.1_AA";
 const DEFAULT_BEST_PRACTICES = true;
-
-// ACE-specific defaults
-const DEFAULT_ACE_POLICIES = ["IBM_Accessibility"];
-const DEFAULT_ACE_REPORT_LEVELS = ["violation", "potentialviolation", "recommendation"];
+const DEFAULT_SCREEN_SIZES: ScreenSize[] = [{ width: 1280, height: 1024, label: "1280x1024" }];
 
 interface ServerConfig {
   engine: Engine;
-  // Axe settings
-  wcagVersion: string;
-  runExperimental: boolean;
+  wcagLevel: WcagLevel;
   includeBestPractices: boolean;
-  // ACE settings
-  acePolicies: string[];
+  screenSizes: ScreenSize[];
   aceReportLevels: string[];
+}
+
+// Parse WCAG_LEVEL env var with flexible input formats
+function parseWcagLevel(input: string | undefined): WcagLevel {
+  if (!input) return DEFAULT_WCAG_LEVEL;
+  
+  // Normalize input: remove spaces, convert to uppercase for level
+  const normalized = input.trim().toLowerCase()
+    .replace(/wcag\s*/i, "")      // Remove "WCAG" prefix
+    .replace(/\s+/g, "_")          // Replace spaces with underscore
+    .replace(/level\s*/i, "")      // Remove "level" word
+    .replace(/_+/g, "_");          // Clean up multiple underscores
+  
+  // Try to match patterns like "2.1_aa", "21aa", "2.1 AA", etc.
+  const match = normalized.match(/^(\d)\.?(\d)?[_\s]*(a{1,3})$/i);
+  if (match) {
+    const major = match[1];
+    const minor = match[2] || "0";
+    const level = match[3].toUpperCase();
+    const key = `${major}.${minor}_${level}` as WcagLevel;
+    if (key in WCAG_LEVEL_MAP) return key;
+  }
+  
+  // Direct match attempt
+  if (input in WCAG_LEVEL_MAP) return input as WcagLevel;
+  
+  // Fallback to default
+  console.error(`Invalid WCAG_LEVEL "${input}", using default "${DEFAULT_WCAG_LEVEL}"`);
+  return DEFAULT_WCAG_LEVEL;
+}
+
+// Parse SCREEN_SIZES env var (e.g., "1280x1024,320x640")
+function parseScreenSizes(input: string | undefined): ScreenSize[] {
+  if (!input) return DEFAULT_SCREEN_SIZES;
+  
+  const sizes: ScreenSize[] = [];
+  const parts = input.split(",").map(s => s.trim()).filter(s => s);
+  
+  for (const part of parts) {
+    const match = part.match(/^(\d+)x(\d+)$/i);
+    if (match) {
+      sizes.push({
+        width: parseInt(match[1], 10),
+        height: parseInt(match[2], 10),
+        label: part
+      });
+    } else {
+      console.error(`Invalid screen size format "${part}", expected "WIDTHxHEIGHT"`);
+    }
+  }
+  
+  return sizes.length > 0 ? sizes : DEFAULT_SCREEN_SIZES;
 }
 
 // Load configuration from environment variables
 function loadConfig(): ServerConfig {
   const engine = (process.env.A11Y_ENGINE?.toLowerCase() as Engine) || DEFAULT_ENGINE;
-  const wcagVersion = process.env.AXE_WCAG_VERSION || DEFAULT_WCAG_VERSION;
-  const runExperimental = process.env.AXE_RUN_EXPERIMENTAL === "true" || DEFAULT_RUN_EXPERIMENTAL;
-  const includeBestPractices = process.env.AXE_BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
+  const wcagLevel = parseWcagLevel(process.env.WCAG_LEVEL);
+  const includeBestPractices = process.env.BEST_PRACTICES !== "false" && DEFAULT_BEST_PRACTICES;
+  const screenSizes = parseScreenSizes(process.env.SCREEN_SIZES);
   
-  // ACE settings
-  const acePolicies = process.env.ACE_POLICIES 
-    ? process.env.ACE_POLICIES.split(",").map(p => p.trim())
-    : DEFAULT_ACE_POLICIES;
-  const aceReportLevels = process.env.ACE_REPORT_LEVELS
-    ? process.env.ACE_REPORT_LEVELS.split(",").map(l => l.trim())
-    : DEFAULT_ACE_REPORT_LEVELS;
+  // Build ACE report levels based on BEST_PRACTICES (recommendations = best practices for ACE)
+  const aceReportLevels = includeBestPractices 
+    ? ["violation", "potentialviolation", "recommendation"]
+    : ["violation", "potentialviolation"];
 
   return {
     engine,
-    wcagVersion,
-    runExperimental,
+    wcagLevel,
     includeBestPractices,
-    acePolicies,
+    screenSizes,
     aceReportLevels,
   };
 }
 
 const serverConfig = loadConfig();
+
+// Get axe tags for current WCAG level
+function getAxeTags(): string[] {
+  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].axeTags;
+}
+
+// Get ACE policy for current WCAG level
+function getAcePolicy(): string {
+  return WCAG_LEVEL_MAP[serverConfig.wcagLevel].acePolicy;
+}
 
 // Helper function to build axe run options
 function buildAxeOptions(userTags?: string[]): any {
@@ -84,19 +158,13 @@ function buildAxeOptions(userTags?: string[]): any {
   }
   
   // Otherwise, use server configuration
-  tags.push(serverConfig.wcagVersion);
+  tags.push(...getAxeTags());
   
   if (serverConfig.includeBestPractices) {
     tags.push("best-practice");
   }
   
-  const options: any = { runOnly: tags };
-  
-  if (serverConfig.runExperimental) {
-    options.runExperimental = true;
-  }
-  
-  return options;
+  return { runOnly: tags };
 }
 
 // Type definitions for axe-core results
@@ -163,7 +231,7 @@ interface ACEReport {
 const server = new Server(
   {
     name: "accessibility-testing-mcp",
-    version: "2.0.0",
+    version: "2.1.0",
   },
   {
     capabilities: {
@@ -175,7 +243,7 @@ const server = new Server(
 );
 
 // Helper function to format axe results
-function formatAxeResults(results: any): string {
+function formatAxeResults(results: any, screenSize?: ScreenSize): string {
   const violations = results.violations || [];
   const passes = results.passes || [];
   const incomplete = results.incomplete || [];
@@ -183,8 +251,11 @@ function formatAxeResults(results: any): string {
   
   let output = `# Accessibility Test Results (Axe-core)\n\n`;
   output += `**URL**: ${results.url}\n`;
-  output += `**Timestamp**: ${results.timestamp}\n\n`;
-  output += `## Summary\n`;
+  output += `**Timestamp**: ${results.timestamp}\n`;
+  if (screenSize) {
+    output += `**Screen Size**: ${screenSize.label}\n`;
+  }
+  output += `\n## Summary\n`;
   output += `- ✅ Passes: ${passes.length}\n`;
   output += `- ❌ Violations: ${violations.length}\n`;
   output += `- ⚠️  Incomplete: ${incomplete.length}\n`;
@@ -222,7 +293,7 @@ function formatAxeResults(results: any): string {
 }
 
 // Helper function to format ACE results
-function formatACEResults(report: ACEReport): string {
+function formatACEResults(report: ACEReport, screenSize?: ScreenSize): string {
   const { summary, results } = report;
   const violations = results.filter(r => r.level === "violation");
   const potentialViolations = results.filter(r => r.level === "potentialviolation");
@@ -233,9 +304,11 @@ function formatACEResults(report: ACEReport): string {
   output += `**URL**: ${summary.URL}\n`;
   output += `**Scan Time**: ${summary.scanTime}ms\n`;
   output += `**Policies**: ${summary.policies.join(", ")}\n`;
-  output += `**Rule Archive**: ${summary.ruleArchive}\n\n`;
-  
-  output += `## Summary\n`;
+  output += `**Rule Archive**: ${summary.ruleArchive}\n`;
+  if (screenSize) {
+    output += `**Screen Size**: ${screenSize.label}\n`;
+  }
+  output += `\n## Summary\n`;
   output += `- ❌ Violations: ${summary.counts.violation}\n`;
   output += `- ⚠️  Potential Violations: ${summary.counts.potentialviolation}\n`;
   output += `- 💡 Recommendations: ${summary.counts.recommendation}\n`;
@@ -329,13 +402,13 @@ async function runACEAnalysis(content: string, label: string, policies?: string[
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  const engineNote = `Current default engine: ${serverConfig.engine}. Set A11Y_ENGINE env var to 'axe' or 'ace' to change.`;
+  const configNote = `Engine: ${serverConfig.engine}, WCAG: ${serverConfig.wcagLevel}, Screens: ${serverConfig.screenSizes.map(s => s.label).join(", ")}`;
   
   return {
     tools: [
       {
         name: "analyze_url",
-        description: `Run accessibility tests on a URL and return detailed violation reports. ${engineNote}`,
+        description: `Run accessibility tests on a URL and return detailed violation reports. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -351,7 +424,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override WCAG tags. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["url"],
@@ -359,7 +432,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_url_json",
-        description: `Run accessibility tests on a URL and return violations in raw JSON format. ${engineNote}`,
+        description: `Run accessibility tests on a URL and return violations in raw JSON format. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -375,7 +448,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override WCAG tags. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["url"],
@@ -383,7 +456,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html",
-        description: `Run accessibility tests on raw HTML content. ${engineNote}`,
+        description: `Run accessibility tests on raw HTML content. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -399,7 +472,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override WCAG tags. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["html"],
@@ -407,7 +480,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "analyze_html_json",
-        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. ${engineNote}`,
+        description: `Run accessibility tests on raw HTML content and return violations in raw JSON format. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -423,7 +496,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             tags: {
               type: "array",
               items: { type: "string" },
-              description: "For Axe: tags like ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: policies like ['IBM_Accessibility', 'WCAG_2_1']",
+              description: "Override WCAG tags. For Axe: ['wcag2a', 'wcag2aa', 'best-practice']. For ACE: ['WCAG_2_1', 'WCAG_2_2']",
             },
           },
           required: ["html"],
@@ -431,7 +504,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "get_rules",
-        description: "Get information about available accessibility rules for the specified engine",
+        description: `Get information about available accessibility rules for the specified engine. [${configNote}]`,
         inputSchema: {
           type: "object",
           properties: {
@@ -465,39 +538,48 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
+    const allResults: string[] = [];
+
     if (engine === "ace") {
-      // Use IBM Equal Access
-      const report = await runACEAnalysis(url, `url-${Date.now()}`, tags);
-      const formattedResults = formatACEResults(report);
+      // Use IBM Equal Access - test each screen size
+      for (const screenSize of serverConfig.screenSizes) {
+        const report = await runACEAnalysis(url, `url-${screenSize.label}-${Date.now()}`, tags);
+        allResults.push(formatACEResults(report, screenSize));
+      }
       return {
-        content: [{ type: "text", text: formattedResults }],
+        content: [{ type: "text", text: allResults.join("\n---\n\n") }],
       };
     }
 
-    // Use Axe-core
+    // Use Axe-core - test each screen size
     const browser = await puppeteer.launch({ headless: true });
     try {
-      const page = await browser.newPage();
-      await page.goto(url, { 
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-      
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const results = await page.evaluate((runTags) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(runTags ? { runOnly: runTags } : {}).then(resolve);
+      for (const screenSize of serverConfig.screenSizes) {
+        const page = await browser.newPage();
+        await page.setViewport({ width: screenSize.width, height: screenSize.height });
+        await page.goto(url, { 
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT 
         });
-      }, tags);
+        
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
-      const formattedResults = formatAxeResults(results as AxeResults);
+        await page.addScriptTag({ path: AXE_CORE_PATH });
+
+        const axeOptions = tags ? { runOnly: tags } : buildAxeOptions();
+        const results = await page.evaluate((options) => {
+          return new Promise((resolve) => {
+            // @ts-ignore - axe is injected globally
+            axe.run(options).then(resolve);
+          });
+        }, axeOptions);
+
+        allResults.push(formatAxeResults(results as AxeResults, screenSize));
+        await page.close();
+      }
 
       return {
-        content: [{ type: "text", text: formattedResults }],
+        content: [{ type: "text", text: allResults.join("\n---\n\n") }],
       };
     } finally {
       await browser.close();
@@ -512,38 +594,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       throw new Error("URL is required");
     }
 
+    const allViolations: any[] = [];
+
     if (engine === "ace") {
-      const report = await runACEAnalysis(url, `url-json-${Date.now()}`, tags);
-      const violations = aceToAxeViolationsFormat(report);
+      for (const screenSize of serverConfig.screenSizes) {
+        const report = await runACEAnalysis(url, `url-json-${screenSize.label}-${Date.now()}`, tags);
+        const violations = aceToAxeViolationsFormat(report);
+        violations.forEach((v: any) => {
+          v.screenSize = screenSize.label;
+        });
+        allViolations.push(...violations);
+      }
       return {
-        content: [{ type: "text", text: JSON.stringify(violations, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(allViolations, null, 2) }],
       };
     }
 
     const browser = await puppeteer.launch({ headless: true });
     try {
-      const page = await browser.newPage();
-      await page.goto(url, { 
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT 
-      });
-      
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
-      await page.addScriptTag({ path: AXE_CORE_PATH });
-
-      const axeOptions = buildAxeOptions(tags);
-      const results = await page.evaluate((options) => {
-        return new Promise((resolve) => {
-          // @ts-ignore - axe is injected globally
-          axe.run(options).then(resolve);
+      for (const screenSize of serverConfig.screenSizes) {
+        const page = await browser.newPage();
+        await page.setViewport({ width: screenSize.width, height: screenSize.height });
+        await page.goto(url, { 
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT 
         });
-      }, axeOptions);
+        
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
-      const axeResults = results as AxeResults;
+        await page.addScriptTag({ path: AXE_CORE_PATH });
+
+        const axeOptions = tags ? { runOnly: tags } : buildAxeOptions();
+        const results = await page.evaluate((options) => {
+          return new Promise((resolve) => {
+            // @ts-ignore - axe is injected globally
+            axe.run(options).then(resolve);
+          });
+        }, axeOptions);
+
+        const axeResults = results as AxeResults;
+        axeResults.violations.forEach((v: any) => {
+          v.screenSize = screenSize.label;
+        });
+        allViolations.push(...axeResults.violations);
+        await page.close();
+      }
 
       return {
-        content: [{ type: "text", text: JSON.stringify(axeResults.violations, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(allViolations, null, 2) }],
       };
     } finally {
       await browser.close();
@@ -644,20 +742,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (engine === "ace") {
       // ACE doesn't have a simple getRules API, provide policy info instead
       let output = `# IBM Equal Access Accessibility Rules\n\n`;
+      output += `## Current Configuration\n\n`;
+      output += `- **WCAG Level**: ${serverConfig.wcagLevel}\n`;
+      output += `- **Policy**: ${getAcePolicy()}\n`;
+      output += `- **Best Practices**: ${serverConfig.includeBestPractices}\n`;
+      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n`;
+      output += `- **Screen Sizes**: ${serverConfig.screenSizes.map(s => s.label).join(", ")}\n\n`;
       output += `## Available Policies\n\n`;
-      output += `- **IBM_Accessibility**: IBM accessibility requirements (includes WCAG 2.1 AA)\n`;
       output += `- **WCAG_2_0**: WCAG 2.0 guidelines\n`;
       output += `- **WCAG_2_1**: WCAG 2.1 guidelines\n`;
       output += `- **WCAG_2_2**: WCAG 2.2 guidelines\n\n`;
       output += `## Report Levels\n\n`;
       output += `- **violation**: Accessibility failures\n`;
       output += `- **potentialviolation**: Needs review for accessibility failures\n`;
-      output += `- **recommendation**: Suggested improvements\n`;
+      output += `- **recommendation**: Suggested improvements (enabled via BEST_PRACTICES=true)\n`;
       output += `- **potentialrecommendation**: Possible improvements to review\n`;
       output += `- **manual**: Requires manual testing\n\n`;
-      output += `## Current Configuration\n\n`;
-      output += `- **Policies**: ${serverConfig.acePolicies.join(", ")}\n`;
-      output += `- **Report Levels**: ${serverConfig.aceReportLevels.join(", ")}\n\n`;
       output += `For complete rule documentation, visit: https://www.ibm.com/able/requirements/checker-rule-sets\n`;
 
       return {

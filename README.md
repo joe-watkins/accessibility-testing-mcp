@@ -9,6 +9,10 @@ An MCP server for accessibility testing using **axe-core** and **IBM Equal Acces
 - **Axe-core** (Deque) - Industry standard, zero false positives
 - **IBM Equal Access** - Comprehensive IBM accessibility requirements
 
+### 📐 Multi-Screen Testing
+
+Test at multiple viewport sizes to catch responsive accessibility issues.
+
 ### 🛠️ Tools
 
 | Tool | Description |
@@ -40,23 +44,14 @@ npm run build
 
 Configure via MCP config `env` section:
 
-#### Engine Selection
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
-| `A11Y_ENGINE` | `axe`, `ace` | `axe` | Default testing engine |
+| `A11Y_ENGINE` | `axe`, `ace` | `axe` | Testing engine |
+| `WCAG_LEVEL` | `2.0_A`, `2.0_AA`, `2.1_A`, `2.1_AA`, `2.2_AA`, etc. | `2.1_AA` | WCAG version & level |
+| `BEST_PRACTICES` | `true`, `false` | `true` | Include best practices/recommendations |
+| `SCREEN_SIZES` | Comma-separated `WIDTHxHEIGHT` | `1280x1024` | Viewport sizes to test |
 
-#### Axe-core Settings
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `AXE_WCAG_VERSION` | `wcag2a`, `wcag2aa`, `wcag21aa`, `wcag22aa` | `wcag2aa` | WCAG version |
-| `AXE_BEST_PRACTICES` | `true`, `false` | `true` | Include best practices |
-| `AXE_RUN_EXPERIMENTAL` | `true`, `false` | `false` | Experimental rules |
-
-#### IBM Equal Access Settings
-| Variable | Values | Default | Description |
-|----------|--------|---------|-------------|
-| `ACE_POLICIES` | Comma-separated | `IBM_Accessibility` | Policies to check |
-| `ACE_REPORT_LEVELS` | Comma-separated | `violation,potentialviolation,recommendation` | Report levels |
+The `WCAG_LEVEL` setting automatically configures both Axe-core tags and IBM Equal Access policies.
 
 ### VS Code (GitHub Copilot)
 
@@ -71,7 +66,9 @@ Add to VS Code settings (JSON):
       "args": ["/path/to/accessibility-testing-mcp/build/index.js"],
       "env": {
         "A11Y_ENGINE": "axe",
-        "AXE_WCAG_VERSION": "wcag21aa"
+        "WCAG_LEVEL": "2.2_AA",
+        "BEST_PRACTICES": "true",
+        "SCREEN_SIZES": "1280x1024,320x640"
       }
     }
   }
@@ -90,7 +87,8 @@ Add to `claude_desktop_config.json`:
       "args": ["/path/to/accessibility-testing-mcp/build/index.js"],
       "env": {
         "A11Y_ENGINE": "ace",
-        "ACE_POLICIES": "IBM_Accessibility,WCAG_2_1"
+        "WCAG_LEVEL": "2.2_AA",
+        "BEST_PRACTICES": "true"
       }
     }
   }
@@ -129,26 +127,13 @@ Add to `claude_desktop_config.json`:
 }
 ```
 
-### Filter by WCAG level (Axe)
+### Override WCAG tags
 ```json
 {
   "name": "analyze_url",
   "arguments": {
     "url": "https://example.com",
-    "engine": "axe",
-    "tags": ["wcag21aa", "best-practice"]
-  }
-}
-```
-
-### Filter by policy (ACE)
-```json
-{
-  "name": "analyze_url",
-  "arguments": {
-    "url": "https://example.com",
-    "engine": "ace",
-    "tags": ["IBM_Accessibility", "WCAG_2_2"]
+    "tags": ["wcag22aa", "best-practice"]
   }
 }
 ```
@@ -160,7 +145,6 @@ Add to `claude_desktop_config.json`:
 | CI/CD pipelines | Axe-core |
 | Zero false positives needed | Axe-core |
 | Comprehensive audits | IBM Equal Access |
-| IBM product development | IBM Equal Access |
 | Enterprise compliance | IBM Equal Access |
 | Quick spot checks | Either |
 
@@ -175,28 +159,21 @@ Add to `claude_desktop_config.json`:
 ### IBM Equal Access Output
 - **Violations**: Accessibility failures
 - **Potential Violations**: Needs review
-- **Recommendations**: Suggested improvements
+- **Recommendations**: Suggested improvements (when BEST_PRACTICES=true)
 - **Manual Checks**: Requires human testing
 
-## WCAG Tags Reference
+## WCAG_LEVEL Values
 
-| Tag | Description |
-|-----|-------------|
-| `wcag2a` | WCAG 2.0 Level A |
-| `wcag2aa` | WCAG 2.0 Level AA |
-| `wcag21aa` | WCAG 2.1 Level AA |
-| `wcag22aa` | WCAG 2.2 Level AA |
-| `best-practice` | Beyond WCAG requirements |
-| `section508` | Section 508 compliance |
-
-## IBM Equal Access Policies
-
-| Policy | Description |
-|--------|-------------|
-| `IBM_Accessibility` | IBM requirements (includes WCAG 2.1 AA) |
-| `WCAG_2_0` | WCAG 2.0 guidelines |
-| `WCAG_2_1` | WCAG 2.1 guidelines |
-| `WCAG_2_2` | WCAG 2.2 guidelines |
+| Level | Description |
+|-------|-------------|
+| `2.0_A` | WCAG 2.0 Level A |
+| `2.0_AA` | WCAG 2.0 Level AA |
+| `2.1_A` | WCAG 2.1 Level A |
+| `2.1_AA` | WCAG 2.1 Level AA (default) |
+| `2.1_AAA` | WCAG 2.1 Level AAA |
+| `2.2_A` | WCAG 2.2 Level A |
+| `2.2_AA` | WCAG 2.2 Level AA |
+| `2.2_AAA` | WCAG 2.2 Level AAA |
 
 ## Dependencies
 
